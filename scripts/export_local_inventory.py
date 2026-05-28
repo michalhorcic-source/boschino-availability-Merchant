@@ -203,8 +203,8 @@ def fetch_merchant_products() -> Dict[str, MerchantProduct]:
         raise RuntimeError("Missing GOOGLE_MERCHANT_ID secret/env var")
 
     headers = google_headers()
-    url = f"https://shoppingcontent.googleapis.com/content/v2.1/{MERCHANT_ID}/products"
-    params: Dict[str, Any] = {"maxResults": 250}
+    url = f"https://merchantapi.googleapis.com/products/v1/accounts/{MERCHANT_ID}/products"
+    params: Dict[str, Any] = {"pageSize": 250}
     by_offer_id: Dict[str, MerchantProduct] = {}
     count = 0
 
@@ -212,10 +212,11 @@ def fetch_merchant_products() -> Dict[str, MerchantProduct]:
         response = requests.get(url, headers=headers, params=params, timeout=60)
         response.raise_for_status()
         payload = response.json()
-        for product in payload.get("resources", []):
-            content_product_id = product.get("id", "")
-            offer_id = product.get("offerId") or product.get("id", "").split(":")[-1]
-            availability = normalize_availability(product.get("availability"))
+        for product in payload.get("products", []):
+            content_product_id = product.get("name", "")
+            offer_id = product.get("offerId") or ""
+            attributes = product.get("productAttributes") or {}
+            availability = normalize_availability(attributes.get("availability"))
             if offer_id:
                 by_offer_id[offer_id] = MerchantProduct(content_product_id, offer_id, availability, product)
                 count += 1
