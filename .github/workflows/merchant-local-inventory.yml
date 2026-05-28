@@ -38,11 +38,11 @@ jobs:
       - name: Run dry-run validation
         if: ${{ github.event.inputs.upload != 'true' }}
         env:
-          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
-          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
-          GOOGLE_MERCHANT_ID: ${{ secrets.GOOGLE_MERCHANT_ID }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GOOGLE_LANGUAGE: ${{ vars.GOOGLE_LANGUAGE || 'cs' }}
           GOOGLE_FEED_LABEL: ${{ vars.GOOGLE_FEED_LABEL || 'CZ' }}
         run: python scripts/export_local_inventory.py
@@ -50,11 +50,11 @@ jobs:
       - name: Run upload
         if: ${{ github.event.inputs.upload == 'true' }}
         env:
-          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
-          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
-          GOOGLE_MERCHANT_ID: ${{ secrets.GOOGLE_MERCHANT_ID }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GOOGLE_LANGUAGE: ${{ vars.GOOGLE_LANGUAGE || 'cs' }}
           GOOGLE_FEED_LABEL: ${{ vars.GOOGLE_FEED_LABEL || 'CZ' }}
         run: |
