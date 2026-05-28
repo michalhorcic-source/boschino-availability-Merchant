@@ -1,0 +1,75 @@
+name: Merchant local inventory validation and upload
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload to Merchant Center API"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      upload_limit:
+        description: "Optional row limit for test upload; 0 means all rows"
+        required: true
+        default: "0"
+
+jobs:
+  export-local-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run dry-run validation
+        if: ${{ github.event.inputs.upload != 'true' }}
+        env:
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
+          GOOGLE_MERCHANT_ID: ${{ secrets.GOOGLE_MERCHANT_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_LANGUAGE: ${{ vars.GOOGLE_LANGUAGE || 'cs' }}
+          GOOGLE_FEED_LABEL: ${{ vars.GOOGLE_FEED_LABEL || 'CZ' }}
+        run: python scripts/export_local_inventory.py
+
+      - name: Run upload
+        if: ${{ github.event.inputs.upload == 'true' }}
+        env:
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
+          GOOGLE_MERCHANT_ID: ${{ secrets.GOOGLE_MERCHANT_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_LANGUAGE: ${{ vars.GOOGLE_LANGUAGE || 'cs' }}
+          GOOGLE_FEED_LABEL: ${{ vars.GOOGLE_FEED_LABEL || 'CZ' }}
+        run: |
+          LIMIT="${{ github.event.inputs.upload_limit }}"
+          if [ -z "$LIMIT" ]; then LIMIT="0"; fi
+          if [ "$LIMIT" = "0" ]; then
+            python scripts/export_local_inventory.py --upload
+          else
+            python scripts/export_local_inventory.py --upload --upload-limit "$LIMIT"
+          fi
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchant-local-inventory-audit
+          path: out/
+          if-no-files-found: warn
