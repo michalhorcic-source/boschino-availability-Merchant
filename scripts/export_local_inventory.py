@@ -5,8 +5,8 @@ Modes:
 - dry-run: fetch Shopify + Merchant products, validate matching, write artifacts only.
 - upload: additionally sends local inventory records to Google Content API for Shopping.
 
-The script intentionally keeps audit files in ./out so a GitHub Actions run can be
-reviewed before enabling real uploads.
+The script keeps audit files in ./out so a GitHub Actions run can be reviewed
+before enabling real uploads.
 """
 
 from __future__ import annotations
@@ -15,14 +15,14 @@ import argparse
 import csv
 import json
 import os
-import re
 import sys
 import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
+import google.auth
 import google.auth.transport.requests
 from google.oauth2 import service_account
 import requests
@@ -36,7 +36,6 @@ MERCHANT_ID = os.getenv("GOOGLE_MERCHANT_ID", "")
 GOOGLE_LANGUAGE = os.getenv("GOOGLE_LANGUAGE", "cs")
 GOOGLE_FEED_LABEL = os.getenv("GOOGLE_FEED_LABEL", "CZ")
 
-# Verified Google Business Profile / Merchant Center store codes.
 LOCATION_TO_STORE_CODE = {
     "gid://shopify/Location/115128074571": "06275645225922442974",  # Praha 8 / Horovo namesti
     "gid://shopify/Location/115128107339": "06824451997053158379",  # Praha 10 / Francouzska
@@ -45,7 +44,6 @@ LOCATION_TO_STORE_CODE = {
 
 TEST_SKU = "8996470703070"
 TEST_MERCHANT_OFFER_ID = "shopify_ZZ_15493147984203_56386003730763"
-
 OUT_DIR = Path("out")
 
 
@@ -154,9 +152,7 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
     """
     variants: List[ShopifyVariant] = []
     cursor: Optional[str] = None
-    page = 0
     while True:
-        page += 1
         data = shopify_graphql(query, {"cursor": cursor})
         connection = data["productVariants"]
         for node in connection["nodes"]:
@@ -179,13 +175,19 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
     return variants
 
 
-def google_credentials() -> service_account.Credentials:
-    raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    if not raw:
-        raise RuntimeError("Missing GOOGLE_SERVICE_ACCOUNT_JSON secret/env var")
-    info = json.loads(raw)
+def google_credentials():
+    """Load Google credentials.
+
+    Preferred mode in GitHub Actions is Workload Identity Federation via
+    google-github-actions/auth, which exposes Application Default Credentials.
+    A JSON service account secret is still supported as a fallback for local use.
+    """
     scopes = ["https://www.googleapis.com/auth/content"]
-    creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+    raw_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if raw_json:
+        creds = service_account.Credentials.from_service_account_info(json.loads(raw_json), scopes=scopes)
+    else:
+        creds, _project = google.auth.default(scopes=scopes)
     request = google.auth.transport.requests.Request()
     creds.refresh(request)
     return creds
@@ -228,17 +230,13 @@ def fetch_merchant_products() -> Dict[str, MerchantProduct]:
 
 
 def qty_from_level(level: Dict[str, Any]) -> int:
-    quantities = level.get("quantities") or []
-    for quantity in quantities:
+    for quantity in level.get("quantities") or []:
         if quantity.get("name") == "available":
             return int(quantity.get("quantity") or 0)
     return 0
 
 
-def calculate_local_rows(
-    variant: ShopifyVariant,
-    merchant_product: MerchantProduct,
-) -> List[Dict[str, Any]]:
+def calculate_local_rows(variant: ShopifyVariant, merchant_product: MerchantProduct) -> List[Dict[str, Any]]:
     qty_by_location: Dict[str, int] = {location_id: 0 for location_id in LOCATION_TO_STORE_CODE}
     for level in variant.inventory_levels:
         location_id = ((level.get("location") or {}).get("id") or "")
@@ -256,11 +254,9 @@ def calculate_local_rows(
             availability = availability_for_positive_quantity(local_qty)
             pickup_sla = "same day"
         elif total_qty > 0:
-            # Transfer from another Boschino location.
             availability = "in_stock"
             pickup_sla = "next day"
         elif global_availability in {"in_stock", "in stock"}:
-            # Globally available, but not physically on the three mapped locations.
             availability = "in_stock"
             pickup_sla = "6-day"
         else:
@@ -304,7 +300,7 @@ def write_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: Optional[List[
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
 
 
 def write_tsv(path: Path, rows: List[Dict[str, Any]]) -> None:
@@ -327,27 +323,7 @@ def write_tsv(path: Path, rows: List[Dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         for row in rows:
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
-
-
-def content_api_localinventory_entry(batch_id: int, row: Dict[str, Any]) -> Dict[str, Any]:
-    # Content API for Shopping localinventory.batch expects a Content API product id,
-    # e.g. online:cs:CZ:shopify_ZZ_...
-    return {
-        "batchId": batch_id,
-        "merchantId": MERCHANT_ID,
-        "method": "insert",
-        "productId": row["content_product_id"],
-        "storeCode": row["store_code"],
-        "localInventory": {
-            "availability": row["availability"],
-            "quantity": int(row["quantity"]),
-            "price": money_from_price(row["price"]),
-            "pickupMethod": row["pickup_method"],
-            "pickupSla": row["pickup_sla"],
-            "pickupCost": money_from_price(row["pickup_cost"]),
-        },
-    }
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
 
 
 def money_from_price(price: str) -> Dict[str, str]:
@@ -355,9 +331,30 @@ def money_from_price(price: str) -> Dict[str, str]:
     return {"value": parts[0], "currency": parts[1] if len(parts) > 1 else "CZK"}
 
 
+def content_api_localinventory_entry(batch_id: int, row: Dict[str, Any]) -> Dict[str, Any]:
+    local_inventory = {
+        "availability": row["availability"],
+        "quantity": int(row["quantity"]),
+        "price": money_from_price(row["price"]),
+        "pickupMethod": row["pickup_method"],
+        "pickupCost": money_from_price(row["pickup_cost"]),
+    }
+    if row.get("pickup_sla"):
+        local_inventory["pickupSla"] = row["pickup_sla"]
+
+    return {
+        "batchId": batch_id,
+        "merchantId": MERCHANT_ID,
+        "method": "insert",
+        "productId": row["content_product_id"],
+        "storeCode": row["store_code"],
+        "localInventory": local_inventory,
+    }
+
+
 def chunks(items: List[Any], size: int) -> Iterable[List[Any]]:
-    for i in range(0, len(items), size):
-        yield items[i : i + size]
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
 
 
 def upload_local_inventory(rows: List[Dict[str, Any]], limit: Optional[int] = None) -> Dict[str, Any]:
@@ -430,18 +427,22 @@ def main() -> int:
         "skipped_missing_sku": len(skipped_missing_sku),
         "skipped_inactive_product": len(skipped_inactive),
         "skipped_not_in_merchant": len(skipped_not_in_merchant),
-        "store_code_counts": {code: sum(1 for row in rows if row["store_code"] == code) for code in LOCATION_TO_STORE_CODE.values()},
+        "store_code_counts": {
+            code: sum(1 for row in rows if row["store_code"] == code)
+            for code in LOCATION_TO_STORE_CODE.values()
+        },
         "control_sku_rows": test_rows,
         "upload_requested": args.upload,
         "upload_limit": args.upload_limit,
     }
 
     if len(test_rows) != 3:
-        summary["warnings"] = summary.get("warnings", []) + [f"Expected 3 control rows for {TEST_SKU}, got {len(test_rows)}"]
+        summary["warnings"] = summary.get("warnings", []) + [
+            f"Expected 3 control rows for {TEST_SKU}, got {len(test_rows)}"
+        ]
 
     if args.upload:
-        upload_result = upload_local_inventory(rows, limit=args.upload_limit or None)
-        summary["upload_result"] = upload_result
+        summary["upload_result"] = upload_local_inventory(rows, limit=args.upload_limit or None)
 
     with (OUT_DIR / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
