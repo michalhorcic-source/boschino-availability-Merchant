@@ -35,6 +35,7 @@ SHOPIFY_GRAPHQL_URL = f"https://{SHOPIFY_SHOP_DOMAIN}/admin/api/{SHOPIFY_API_VER
 MERCHANT_ID = os.getenv("GOOGLE_MERCHANT_ID", "")
 GOOGLE_LANGUAGE = os.getenv("GOOGLE_LANGUAGE", "cs")
 GOOGLE_FEED_LABEL = os.getenv("GOOGLE_FEED_LABEL", "CZ")
+MERCHANT_PAGE_SIZE = int(os.getenv("GOOGLE_MERCHANT_PAGE_SIZE", "100"))
 
 LOCATION_TO_STORE_CODE = {
     "gid://shopify/Location/115128074571": "06275645225922442974",  # Praha 8 / Horovo namesti
@@ -204,14 +205,35 @@ def fetch_merchant_products() -> Dict[str, MerchantProduct]:
 
     headers = google_headers()
     url = f"https://merchantapi.googleapis.com/products/v1/accounts/{MERCHANT_ID}/products"
-    params: Dict[str, Any] = {"pageSize": 250}
+    params: Dict[str, Any] = {"pageSize": MERCHANT_PAGE_SIZE}
     by_offer_id: Dict[str, MerchantProduct] = {}
     count = 0
 
     while True:
-        response = requests.get(url, headers=headers, params=params, timeout=60)
-        response.raise_for_status()
-        payload = response.json()
+        payload = None
+        for attempt in range(1, 9):
+            response = requests.get(url, headers=headers, params=params, timeout=60)
+            if response.status_code < 400:
+                payload = response.json()
+                break
+
+            retryable = response.status_code == 429 or response.status_code >= 500
+            if not retryable or attempt == 8:
+                response.raise_for_status()
+
+            wait_seconds = min(90, (2 ** (attempt - 1)) * 5)
+            print(
+                f"Merchant API transient error {response.status_code}. "
+                f"Attempt {attempt}/8. Waiting {wait_seconds}s. URL: {response.url}",
+                flush=True,
+            )
+            if response.text:
+                print(response.text[:1000], flush=True)
+            time.sleep(wait_seconds)
+
+        if payload is None:
+            raise RuntimeError("Merchant products list returned no payload after retries")
+
         for product in payload.get("products", []):
             product_name = product.get("base64EncodedName") or product.get("name", "")
             offer_id = product.get("offerId") or ""
