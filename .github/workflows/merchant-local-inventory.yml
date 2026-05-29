@@ -41,12 +41,12 @@ jobs:
           text = text.replace('location { id name }', 'location { id }')
           text = text.replace('        "pickupCost": merchant_price_from_czk(row["pickup_cost"]),\n', '')
           text = text.replace(
-              '    product_key = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n',
-              '    product_key = f"local~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n'
+              '    product_key = f"local~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n',
+              '    product_key = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n'
           )
           text = text.replace(
               '    product_key = f"online~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n',
-              '    product_key = f"local~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n'
+              '    product_key = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n'
           )
           text = text.replace(
               '        response = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)\n',
