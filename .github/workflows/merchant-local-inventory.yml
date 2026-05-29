@@ -31,6 +31,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Patch Shopify query for current token scopes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/export_local_inventory.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('location { id name }', 'location { id }')
+          path.write_text(text, encoding='utf-8')
+          PY
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
