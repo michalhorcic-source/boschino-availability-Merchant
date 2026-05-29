@@ -40,6 +40,22 @@ jobs:
           text = path.read_text(encoding='utf-8')
           text = text.replace('location { id name }', 'location { id }')
           text = text.replace('        "pickupCost": merchant_price_from_czk(row["pickup_cost"]),\n', '')
+          text = text.replace(
+              '    product_key = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n',
+              '    product_key = f"online~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n'
+          )
+          text = text.replace(
+              '        response = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)\n',
+              '        try:\n'
+              '            response = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)\n'
+              '        except requests.exceptions.RequestException as exc:\n'
+              '            if attempt == max_retries:\n'
+              '                return 598, {}, str(exc)[:4000]\n'
+              '            wait_seconds = min(90, (2 ** (attempt - 1)) * 5)\n'
+              '            print(f"Merchant API request exception. Attempt {attempt}/{max_retries}. Waiting {wait_seconds}s. {exc}", flush=True)\n'
+              '            time.sleep(wait_seconds)\n'
+              '            continue\n'
+          )
 
           text = text.replace(
               '    variant_availability: str\n    inventory_levels: List[Dict[str, Any]]\n',
