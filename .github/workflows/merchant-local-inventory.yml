@@ -31,7 +31,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Patch Shopify query for current token scopes
+      - name: Patch script for current API scopes and Merchant payload
         shell: bash
         run: |
           python - <<'PY'
@@ -39,6 +39,7 @@ jobs:
           path = Path('scripts/export_local_inventory.py')
           text = path.read_text(encoding='utf-8')
           text = text.replace('location { id name }', 'location { id }')
+          text = text.replace('        "pickupCost": merchant_price_from_czk(row["pickup_cost"]),\n', '')
           path.write_text(text, encoding='utf-8')
           PY
 
@@ -63,8 +64,8 @@ jobs:
           SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
           GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
-          GOOGLE_LANGUAGE: ${{ vars.GOOGLE_LANGUAGE || 'cs' }}
-          GOOGLE_FEED_LABEL: ${{ vars.GOOGLE_FEED_LABEL || 'CZK_105791684939' }}
+          GOOGLE_LANGUAGE: cs
+          GOOGLE_FEED_LABEL: CZK_105791684939
         run: python scripts/export_local_inventory.py
 
       - name: Run upload
@@ -74,8 +75,8 @@ jobs:
           SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
           GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
-          GOOGLE_LANGUAGE: ${{ vars.GOOGLE_LANGUAGE || 'cs' }}
-          GOOGLE_FEED_LABEL: ${{ vars.GOOGLE_FEED_LABEL || 'CZK_105791684939' }}
+          GOOGLE_LANGUAGE: cs
+          GOOGLE_FEED_LABEL: CZK_105791684939
         run: |
           LIMIT="${{ github.event.inputs.upload_limit }}"
           if [ -z "$LIMIT" ]; then LIMIT="0"; fi
