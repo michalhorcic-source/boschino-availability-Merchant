@@ -1,10 +1,11 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Export Boschino Shopify local availability to Google Merchant Center.
 
-This version treats Shopify as the source of truth and does not page through all
-Merchant products before it can work. It builds a local inventory supplemental
-file named UPLOAD_SUPPLEMENTAL_SOURCE_3.tsv and, when requested, uploads rows to
-Google Merchant API local inventory.
+The script produces a Google local product inventory file and can upload the
+same rows through Merchant API localInventories:insert. Before uploading, it can
+resolve the real Merchant product resource by trying the common product key
+formats, so local inventory is attached to an existing processed product instead
+of guessing the parent resource name.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import google.auth
@@ -35,7 +36,8 @@ SHOPIFY_PAGE_SLEEP_SECONDS = float(os.getenv("SHOPIFY_PAGE_SLEEP_SECONDS", "0.35
 
 MERCHANT_ID = os.getenv("GOOGLE_MERCHANT_ID", "")
 GOOGLE_LANGUAGE = os.getenv("GOOGLE_LANGUAGE", "cs")
-GOOGLE_FEED_LABEL = os.getenv("GOOGLE_FEED_LABEL", "CZK_105791684939")
+GOOGLE_FEED_LABEL = os.getenv("GOOGLE_FEED_LABEL", "CZ")
+MERCHANT_PRODUCT_KEY_MODE = os.getenv("MERCHANT_PRODUCT_KEY_MODE", "auto").strip().lower()
 
 LOCATION_TO_STORE_CODE = {
     "gid://shopify/Location/115128074571": "06275645225922442974",  # Praha 8 / Horovo namesti
@@ -87,10 +89,6 @@ def to_decimal(value: Any) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def format_czk(value: Any) -> str:
-    return f"{to_decimal(value)} CZK"
-
-
 def normalize_text(value: Any) -> str:
     if value is None:
         return ""
@@ -122,11 +120,7 @@ def shopify_graphql(query: str, variables: Optional[Dict[str, Any]] = None, max_
 
         if response.status_code == 429 or response.status_code >= 500:
             wait_seconds = min(90, (2 ** (attempt - 1)) * 2)
-            print(
-                f"Shopify HTTP transient error {response.status_code}. "
-                f"Attempt {attempt}/{max_retries}. Waiting {wait_seconds}s.",
-                flush=True,
-            )
+            print(f"Shopify HTTP transient error {response.status_code}. Attempt {attempt}/{max_retries}. Waiting {wait_seconds}s.", flush=True)
             time.sleep(wait_seconds)
             continue
 
@@ -152,11 +146,7 @@ def shopify_graphql(query: str, variables: Optional[Dict[str, Any]] = None, max_
             restore_rate = float(throttle.get("restoreRate") or 50)
             missing = max(0, requested - available)
             wait_seconds = min(120, max(5, (missing / max(restore_rate, 1)) + 5))
-            print(
-                f"Shopify GraphQL throttled. Attempt {attempt}/{max_retries}. "
-                f"Waiting {wait_seconds:.1f}s.",
-                flush=True,
-            )
+            print(f"Shopify GraphQL throttled. Attempt {attempt}/{max_retries}. Waiting {wait_seconds:.1f}s.", flush=True)
             time.sleep(wait_seconds)
             continue
 
@@ -194,7 +184,7 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
             status
             totalInventory
             productAvailability: metafield(namespace: "custom", key: "availability") { value }
-            productDostupnost: metafield(namespace: "custom", key: "dostupnost") { value }
+            productDostupnostCustom: metafield(namespace: "custom", key: "dostupnost") { value }
           }
           inventoryItem {
             id
@@ -234,7 +224,7 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
                     product_title=product.get("title", ""),
                     product_status=product.get("status", ""),
                     product_total_inventory=int(product.get("totalInventory") or 0),
-                    product_availability=first_metafield_value(product.get("productAvailability"), product.get("productDostupnost")),
+                    product_availability=first_metafield_value(product.get("productAvailability"), product.get("productDostupnostCustom")),
                     variant_availability=first_metafield_value(node.get("variantAvailability"), node.get("variantDostupnost")),
                     inventory_levels=inventory_levels,
                 )
@@ -266,17 +256,18 @@ def google_headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
 
 
-def request_json_with_retry(
-    method: str,
-    url: str,
-    headers: Dict[str, str],
-    *,
-    json_body: Optional[Dict[str, Any]] = None,
-    timeout: int = 60,
-    max_retries: int = 8,
-) -> Tuple[int, Dict[str, Any], str]:
+def request_json_with_retry(method: str, url: str, headers: Dict[str, str], *, json_body: Optional[Dict[str, Any]] = None, timeout: int = 60, max_retries: int = 8) -> Tuple[int, Dict[str, Any], str]:
     for attempt in range(1, max_retries + 1):
-        response = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)
+        try:
+            response = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            if attempt == max_retries:
+                return 598, {}, str(exc)[:4000]
+            wait_seconds = min(90, (2 ** (attempt - 1)) * 5)
+            print(f"Merchant API request exception. Attempt {attempt}/{max_retries}. Waiting {wait_seconds}s. {exc}", flush=True)
+            time.sleep(wait_seconds)
+            continue
+
         if response.status_code < 400:
             payload = response.json() if response.text.strip() else {}
             return response.status_code, payload, response.text
@@ -286,11 +277,7 @@ def request_json_with_retry(
             return response.status_code, {}, response.text[:4000]
 
         wait_seconds = min(90, (2 ** (attempt - 1)) * 5)
-        print(
-            f"Merchant API transient error {response.status_code}. "
-            f"Attempt {attempt}/{max_retries}. Waiting {wait_seconds}s. URL: {response.url}",
-            flush=True,
-        )
+        print(f"Merchant API transient error {response.status_code}. Attempt {attempt}/{max_retries}. Waiting {wait_seconds}s. URL: {response.url}", flush=True)
         if response.text:
             print(response.text[:1000], flush=True)
         time.sleep(wait_seconds)
@@ -318,23 +305,21 @@ def is_central_available(variant: ShopifyVariant, mapped_total_qty: int) -> bool
     text = normalize_text(f"{variant.variant_availability} {variant.product_availability}")
     if "centr" in text:
         return True
-    if variant.inventory_quantity > mapped_total_qty:
-        return True
-    return False
+    return variant.inventory_quantity > mapped_total_qty
 
 
 def merchant_price_for_variant(variant: ShopifyVariant) -> Tuple[str, str]:
-    price = to_decimal(variant.price)
+    current_price = to_decimal(variant.price)
     compare_at = to_decimal(variant.compare_at_price)
-    merchant_price = compare_at if compare_at > price else price
-    return f"{merchant_price} CZK", f"{price} CZK"
+    regular_price = compare_at if compare_at > current_price else current_price
+    sale_price = current_price if current_price < regular_price else Decimal("0")
+    return f"{regular_price} CZK", (f"{sale_price} CZK" if sale_price > 0 else "")
 
 
 def calculate_local_rows(variant: ShopifyVariant) -> List[Dict[str, Any]]:
     qty_by_location = mapped_quantities(variant)
     mapped_total_qty = sum(qty_by_location.values())
     central_available = is_central_available(variant, mapped_total_qty)
-    global_available = variant.inventory_quantity > 0 or mapped_total_qty > 0 or central_available
     price, sale_price = merchant_price_for_variant(variant)
 
     rows: List[Dict[str, Any]] = []
@@ -343,19 +328,24 @@ def calculate_local_rows(variant: ShopifyVariant) -> List[Dict[str, Any]]:
 
         if local_qty > 0:
             availability = "limited_availability" if local_qty <= 2 else "in_stock"
+            pickup_method = "buy"
             pickup_sla = "same day"
+            delivery_source = "local_store"
         elif mapped_total_qty > 0:
-            availability = "in_stock"
+            availability = "out_of_stock"
+            pickup_method = "ship to store"
             pickup_sla = "next day"
+            delivery_source = "other_store"
         elif central_available:
-            availability = "in_stock"
-            pickup_sla = "7-day"
-        elif global_available:
-            availability = "in_stock"
-            pickup_sla = "7-day"
+            availability = "out_of_stock"
+            pickup_method = "ship to store"
+            pickup_sla = "multi-week"
+            delivery_source = "central_stock"
         else:
             availability = "out_of_stock"
+            pickup_method = "not supported"
             pickup_sla = ""
+            delivery_source = "unavailable"
 
         rows.append(
             {
@@ -369,14 +359,14 @@ def calculate_local_rows(variant: ShopifyVariant) -> List[Dict[str, Any]]:
                 "price": price,
                 "sale_price": sale_price,
                 "sale_price_effective_date": "",
-                "pickup_method": "buy",
+                "pickup_method": pickup_method,
                 "pickup_sla": pickup_sla,
-                "pickup_cost": "0.00 CZK",
                 "instore_product_location": "",
                 "local_shipping_label": "",
                 "shopify_inventory_quantity": variant.inventory_quantity,
                 "mapped_locations_quantity": mapped_total_qty,
                 "central_available": central_available,
+                "delivery_source": delivery_source,
                 "shopify_availability_text": first_metafield_value(variant.variant_availability, variant.product_availability),
             }
         )
@@ -400,26 +390,25 @@ def write_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: Optional[List[
 
 
 def write_tsv(path: Path, rows: List[Dict[str, Any]]) -> None:
-    fieldnames = [
-        "id",
-        "store_code",
-        "availability",
-        "quantity",
-        "price",
-        "sale_price",
-        "sale_price_effective_date",
-        "pickup_method",
-        "pickup_sla",
-        "pickup_cost",
-        "instore_product_location",
-        "local_shipping_label",
+    # File-feed header follows the local product inventory feed naming style.
+    field_map = [
+        ("id", "id"),
+        ("store code", "store_code"),
+        ("availability", "availability"),
+        ("price", "price"),
+        ("sale price", "sale_price"),
+        ("quantity", "quantity"),
+        ("pickup method", "pickup_method"),
+        ("pickup SLA", "pickup_sla"),
+        ("instore product location", "instore_product_location"),
+        ("local shipping label", "local_shipping_label"),
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer = csv.DictWriter(handle, fieldnames=[name for name, _key in field_map], delimiter="\t")
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: row.get(key, "") for key in fieldnames})
+            writer.writerow({name: row.get(key, "") for name, key in field_map})
 
 
 def merchant_price_from_czk(price: str) -> Dict[str, str]:
@@ -439,8 +428,17 @@ def merchant_availability(value: str) -> str:
 
 
 def merchant_pickup_method(value: str) -> str:
-    mapping = {"buy": "BUY", "reserve": "RESERVE", "ship_to_store": "SHIP_TO_STORE", "not_supported": "NOT_SUPPORTED"}
-    return mapping.get(normalize_availability(value), "BUY")
+    mapping = {
+        "buy": "BUY",
+        "reserve": "RESERVE",
+        "ship_to_store": "SHIP_TO_STORE",
+        "ship-to-store": "SHIP_TO_STORE",
+        "ship to store": "SHIP_TO_STORE",
+        "not_supported": "NOT_SUPPORTED",
+        "not-supported": "NOT_SUPPORTED",
+        "not supported": "NOT_SUPPORTED",
+    }
+    return mapping.get(normalize_availability(value), "NOT_SUPPORTED")
 
 
 def merchant_pickup_sla(value: str) -> str:
@@ -464,7 +462,6 @@ def merchant_local_inventory_body(row: Dict[str, Any]) -> Dict[str, Any]:
         "quantity": str(int(row["quantity"])),
         "price": merchant_price_from_czk(row["price"]),
         "pickupMethod": merchant_pickup_method(row["pickup_method"]),
-        "pickupCost": merchant_price_from_czk(row["pickup_cost"]),
     }
     pickup_sla = merchant_pickup_sla(row.get("pickup_sla", ""))
     if pickup_sla:
@@ -473,13 +470,48 @@ def merchant_local_inventory_body(row: Dict[str, Any]) -> Dict[str, Any]:
         attributes["salePrice"] = merchant_price_from_czk(row["sale_price"])
     if row.get("sale_price_effective_date"):
         attributes["salePriceEffectiveDate"] = row["sale_price_effective_date"]
+    if row.get("instore_product_location"):
+        attributes["instoreProductLocation"] = row["instore_product_location"]
 
     return {"storeCode": row["store_code"], "localInventoryAttributes": attributes}
 
 
-def merchant_product_parent(offer_id: str) -> str:
-    product_key = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"
+def product_key_candidates(offer_id: str) -> List[str]:
+    direct = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"
+    online = f"online~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"
+    local = f"local~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"
+    candidates = [direct, online, local]
+    if MERCHANT_PRODUCT_KEY_MODE == "direct":
+        candidates = [direct]
+    elif MERCHANT_PRODUCT_KEY_MODE == "online":
+        candidates = [online, direct]
+    elif MERCHANT_PRODUCT_KEY_MODE == "local":
+        candidates = [local, direct]
+    return list(dict.fromkeys(candidates))
+
+
+def merchant_product_parent_from_key(product_key: str) -> str:
     return f"accounts/{MERCHANT_ID}/products/{product_key}"
+
+
+def resolve_product_parent(offer_id: str, headers: Dict[str, str], cache: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    if offer_id in cache:
+        return cache[offer_id]
+
+    checked: List[Dict[str, Any]] = []
+    for product_key in product_key_candidates(offer_id):
+        parent = merchant_product_parent_from_key(product_key)
+        url = f"https://merchantapi.googleapis.com/products/v1/{quote(parent, safe='/~:_-')}"
+        status_code, payload, text = request_json_with_retry("GET", url, headers, timeout=45, max_retries=3)
+        checked.append({"product_key": product_key, "status_code": status_code, "response": text[:800]})
+        if status_code < 400:
+            resolved = {"found": True, "parent": parent, "product_key": product_key, "checked": checked, "product": payload}
+            cache[offer_id] = resolved
+            return resolved
+
+    resolved = {"found": False, "parent": merchant_product_parent_from_key(product_key_candidates(offer_id)[0]), "product_key": product_key_candidates(offer_id)[0], "checked": checked, "product": {}}
+    cache[offer_id] = resolved
+    return resolved
 
 
 def upload_local_inventory(rows: List[Dict[str, Any]], limit: Optional[int] = None) -> Dict[str, Any]:
@@ -490,35 +522,38 @@ def upload_local_inventory(rows: List[Dict[str, Any]], limit: Optional[int] = No
     upload_rows = rows[:limit] if limit else rows
     results: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
+    product_cache: Dict[str, Dict[str, Any]] = {}
+    payload_audit: List[Dict[str, Any]] = []
 
     for index, row in enumerate(upload_rows, start=1):
-        parent = merchant_product_parent(row["id"])
+        resolved = resolve_product_parent(row["id"], headers, product_cache)
+        parent = resolved["parent"]
         url = f"https://merchantapi.googleapis.com/inventories/v1/{quote(parent, safe='/~:_-')}/localInventories:insert"
         body = merchant_local_inventory_body(row)
+        payload_audit.append({"row_index": index, "id": row.get("id", ""), "sku": row.get("sku", ""), "store_code": row.get("store_code", ""), "resolved_parent": parent, "product_lookup_found": resolved.get("found"), "body": body})
+
+        if not resolved.get("found"):
+            errors.append({"row_index": index, "id": row.get("id", ""), "store_code": row.get("store_code", ""), "status_code": 404, "resolved_parent": parent, "response": json.dumps({"message": "Product parent was not found before local inventory upload", "checked": resolved.get("checked", [])}, ensure_ascii=False)[:4000]})
+            print(f"Product parent not found: {row.get('id')} store={row.get('store_code')}", flush=True)
+            continue
+
         status_code, payload, text = request_json_with_retry("POST", url, headers, json_body=body, timeout=60, max_retries=5)
 
         if status_code >= 400:
-            errors.append(
-                {
-                    "row_index": index,
-                    "id": row.get("id", ""),
-                    "store_code": row.get("store_code", ""),
-                    "status_code": status_code,
-                    "response": text[:4000],
-                }
-            )
+            errors.append({"row_index": index, "id": row.get("id", ""), "store_code": row.get("store_code", ""), "status_code": status_code, "resolved_parent": parent, "response": text[:4000]})
             print(f"Local inventory upload error {status_code}: {row.get('id')} store={row.get('store_code')}", flush=True)
             continue
 
-        results.append(payload)
+        results.append({"row_index": index, "id": row.get("id", ""), "store_code": row.get("store_code", ""), "resolved_parent": parent, "response": payload})
         if index % 50 == 0 or index == len(upload_rows):
             print(f"Uploaded local inventory entries={index} errors={len(errors)}", flush=True)
         time.sleep(0.08)
 
+    write_csv(OUT_DIR / "upload_payload_audit.csv", payload_audit)
     if errors:
         write_csv(OUT_DIR / "upload_errors.csv", errors)
 
-    return {"uploaded_rows": len(upload_rows), "errors": len(errors), "sample_results": results[:5]}
+    return {"uploaded_rows": len(upload_rows), "errors": len(errors), "sample_results": results[:5], "product_parent_cache": {key: {"found": value.get("found"), "parent": value.get("parent"), "product_key": value.get("product_key")} for key, value in product_cache.items()}}
 
 
 def main() -> int:
@@ -544,8 +579,8 @@ def main() -> int:
             continue
         rows.extend(calculate_local_rows(variant))
 
+    write_tsv(OUT_DIR / "LOCAL_INVENTORY.tsv", rows)
     write_tsv(OUT_DIR / "UPLOAD_SUPPLEMENTAL_SOURCE_3.tsv", rows)
-    write_tsv(OUT_DIR / "local_inventory_shopify.tsv", rows)
     write_csv(OUT_DIR / "local_inventory_shopify_preview.csv", rows)
     write_csv(OUT_DIR / "skipped_missing_sku.csv", skipped_missing_sku)
     write_csv(OUT_DIR / "skipped_inactive_product.csv", skipped_inactive)
@@ -569,8 +604,13 @@ def main() -> int:
         "control_sku_rows": test_rows,
         "upload_requested": args.upload,
         "upload_limit": args.upload_limit,
+        "upload_sku": args.upload_sku,
+        "upload_rows_source_count": len(upload_rows_source),
         "shopify_page_size": SHOPIFY_PAGE_SIZE,
+        "google_language": GOOGLE_LANGUAGE,
         "google_feed_label": GOOGLE_FEED_LABEL,
+        "merchant_product_key_mode": MERCHANT_PRODUCT_KEY_MODE,
+        "local_inventory_template": ["id", "store code", "availability", "price", "sale price", "quantity", "pickup method", "pickup SLA", "instore product location", "local shipping label"],
     }
 
     if len(test_rows) != 3:
@@ -592,4 +632,3 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
-
