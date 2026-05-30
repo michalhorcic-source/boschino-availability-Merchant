@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Export Boschino Shopify local availability to Google Merchant Center.
 
 The script produces a Google local product inventory file and can upload the
@@ -192,7 +192,7 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
             tracked
             inventoryLevels(first: 20) {
               nodes {
-                location { id name }
+                location { id }
                 quantities(names: ["available"]) { name quantity }
               }
             }
@@ -632,3 +632,4 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+
