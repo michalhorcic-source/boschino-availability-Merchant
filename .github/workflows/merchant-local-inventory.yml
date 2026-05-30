@@ -1,4 +1,4 @@
-name: Merchant local inventory validation and upload
+﻿name: Merchant local inventory validation and upload
 
 on:
   schedule:
@@ -119,7 +119,7 @@ jobs:
           SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
           GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
           GOOGLE_LANGUAGE: cs
-          GOOGLE_FEED_LABEL: CZK_105791684939
+          GOOGLE_FEED_LABEL: CZ
         run: python scripts/export_local_inventory.py
 
       - name: Run upload
@@ -130,7 +130,7 @@ jobs:
           SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
           GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
           GOOGLE_LANGUAGE: cs
-          GOOGLE_FEED_LABEL: CZK_105791684939
+          GOOGLE_FEED_LABEL: CZ
         run: |
           LIMIT="${{ github.event.inputs.upload_limit }}"
           if [ -z "$LIMIT" ]; then LIMIT="0"; fi
