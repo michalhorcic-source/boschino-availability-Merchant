@@ -505,7 +505,7 @@ def resolve_product_parent(offer_id: str, headers: Dict[str, str], cache: Dict[s
         status_code, payload, text = request_json_with_retry("GET", url, headers, timeout=45, max_retries=3)
         checked.append({"product_key": product_key, "status_code": status_code, "response": text[:800]})
         if status_code < 400:
-            resolved = {"found": True, "parent": parent, "product_key": product_key, "checked": checked, "product": payload}
+            resolved = {"found": True, "parent": payload.get("base64EncodedName") or payload.get("name") or parent, "plain_parent": parent, "product_key": product_key, "checked": checked, "product": payload}
             cache[offer_id] = resolved
             return resolved
 
@@ -632,4 +632,5 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+
 
