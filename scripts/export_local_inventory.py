@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Export Boschino Shopify local availability to Google Merchant Center.
 
 This version treats Shopify as the source of truth and does not page through all
@@ -525,6 +525,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--upload", action="store_true", help="Upload to Google Merchant API local inventory")
     parser.add_argument("--upload-limit", type=int, default=0, help="Optional row limit for test uploads")
+    parser.add_argument("--upload-sku", default="", help="Optional SKU filter for targeted test uploads")
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -552,6 +553,12 @@ def main() -> int:
     test_rows = [row for row in rows if row.get("sku") == TEST_SKU or row.get("id") == TEST_MERCHANT_OFFER_ID]
     write_csv(OUT_DIR / "control_sku_8996470703070.csv", test_rows)
 
+    upload_rows_source = rows
+    if args.upload_sku:
+        upload_rows_source = [row for row in rows if row.get("sku") == args.upload_sku]
+        if not upload_rows_source:
+            raise RuntimeError(f"No rows found for upload SKU {args.upload_sku}")
+
     summary = {
         "shopify_variants_total": len(variants),
         "local_inventory_rows": len(rows),
@@ -570,7 +577,7 @@ def main() -> int:
         summary["warnings"] = summary.get("warnings", []) + [f"Expected 3 control rows for {TEST_SKU}, got {len(test_rows)}"]
 
     if args.upload:
-        summary["upload_result"] = upload_local_inventory(rows, limit=args.upload_limit or None)
+        summary["upload_result"] = upload_local_inventory(upload_rows_source, limit=args.upload_limit or None)
 
     with (OUT_DIR / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
@@ -585,3 +592,4 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+

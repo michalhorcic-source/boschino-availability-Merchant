@@ -137,7 +137,7 @@ jobs:
           if [ "$LIMIT" = "0" ]; then
             python scripts/export_local_inventory.py --upload
           else
-            python scripts/export_local_inventory.py --upload --upload-limit "$LIMIT"
+            python scripts/export_local_inventory.py --upload --upload-limit "$LIMIT" --upload-sku "${{ github.event.inputs.upload_sku }}"
           fi
 
       - name: Upload audit artifacts
@@ -147,3 +147,4 @@ jobs:
           name: merchant-local-inventory-audit
           path: out/
           if-no-files-found: warn
+
