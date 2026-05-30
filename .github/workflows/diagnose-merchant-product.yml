@@ -1,0 +1,68 @@
+name: Diagnose Merchant product resource
+
+on:
+  workflow_dispatch:
+    inputs:
+      offer_id:
+        description: "Merchant UI product id / offer id"
+        required: true
+        default: "shopify_ZZ_15493147984203_56386003730763"
+      variant_gid:
+        description: "Shopify variant GID from raw Merchant attributes"
+        required: false
+        default: "gid://shopify/ProductVariant/56386003730763"
+      gtin:
+        description: "GTIN/EAN"
+        required: false
+        default: "4054905492008"
+      sku:
+        description: "Shopify SKU"
+        required: false
+        default: "8996470703070"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Merchant diagnostics
+        env:
+          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
+          GOOGLE_LANGUAGE: cs
+          GOOGLE_FEED_LABEL: CZ
+        run: |
+          python scripts/diagnose_merchant_product.py \
+            --offer-id "${{ github.event.inputs.offer_id }}" \
+            --variant-gid "${{ github.event.inputs.variant_gid }}" \
+            --gtin "${{ github.event.inputs.gtin }}" \
+            --sku "${{ github.event.inputs.sku }}"
+
+      - name: Upload diagnostics artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchant-product-diagnostics
+          path: out/
+          if-no-files-found: warn
