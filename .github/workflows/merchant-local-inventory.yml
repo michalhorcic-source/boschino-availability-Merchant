@@ -35,72 +35,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Patch script for current API scopes and Merchant payload
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('scripts/export_local_inventory.py')
-          text = path.read_text(encoding='utf-8')
-          text = text.replace('location { id name }', 'location { id }')
-          text = text.replace('        "pickupCost": merchant_price_from_czk(row["pickup_cost"]),\n', '')
-          text = text.replace(
-              '    product_key = f"local~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n',
-              '    product_key = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n'
-          )
-          text = text.replace(
-              '    product_key = f"online~{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n',
-              '    product_key = f"{GOOGLE_LANGUAGE}~{GOOGLE_FEED_LABEL}~{offer_id}"\n'
-          )
-          text = text.replace(
-              '        response = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)\n',
-              '        try:\n'
-              '            response = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)\n'
-              '        except requests.exceptions.RequestException as exc:\n'
-              '            if attempt == max_retries:\n'
-              '                return 598, {}, str(exc)[:4000]\n'
-              '            wait_seconds = min(90, (2 ** (attempt - 1)) * 5)\n'
-              '            print(f"Merchant API request exception. Attempt {attempt}/{max_retries}. Waiting {wait_seconds}s. {exc}", flush=True)\n'
-              '            time.sleep(wait_seconds)\n'
-              '            continue\n'
-          )
-
-          text = text.replace(
-              '    variant_availability: str\n    inventory_levels: List[Dict[str, Any]]\n',
-              '    variant_availability: str\n    custom_label_0: str\n    custom_label_1: str\n    inventory_levels: List[Dict[str, Any]]\n'
-          )
-          text = text.replace(
-              '            productDostupnost: metafield(namespace: "custom", key: "dostupnost") { value }\n',
-              '            productDostupnost: metafield(namespace: "custom", key: "dostupnost") { value }\n'
-              '            googleCustomLabel0: metafield(namespace: "mm-google-shopping", key: "custom_label_0") { value }\n'
-              '            googleCustomLabel1: metafield(namespace: "mm-google-shopping", key: "custom_label_1") { value }\n'
-          )
-          text = text.replace(
-              '                    variant_availability=first_metafield_value(node.get("variantAvailability"), node.get("variantDostupnost")),\n'
-              '                    inventory_levels=inventory_levels,\n',
-              '                    variant_availability=first_metafield_value(node.get("variantAvailability"), node.get("variantDostupnost")),\n'
-              '                    custom_label_0=first_metafield_value(product.get("googleCustomLabel0")),\n'
-              '                    custom_label_1=first_metafield_value(product.get("googleCustomLabel1")),\n'
-              '                    inventory_levels=inventory_levels,\n'
-          )
-          text = text.replace(
-              '                "shopify_availability_text": first_metafield_value(variant.variant_availability, variant.product_availability),\n'
-              '            }\n',
-              '                "shopify_availability_text": first_metafield_value(variant.variant_availability, variant.product_availability),\n'
-              '                "custom_label_0": variant.custom_label_0,\n'
-              '                "custom_label_1": variant.custom_label_1,\n'
-              '            }\n'
-          )
-          text = text.replace(
-              '        "local_shipping_label",\n    ]\n',
-              '        "local_shipping_label",\n'
-              '        "custom_label_0",\n'
-              '        "custom_label_1",\n'
-              '    ]\n'
-          )
-          path.write_text(text, encoding='utf-8')
-          PY
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -151,5 +85,6 @@ jobs:
           name: merchant-local-inventory-audit
           path: out/
           if-no-files-found: warn
+
 
 
