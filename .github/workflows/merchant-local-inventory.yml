@@ -17,6 +17,10 @@ on:
         description: "Optional row limit for test upload; 0 means all rows"
         required: true
         default: "0"
+      upload_sku:
+        description: "Optional SKU filter for targeted test upload"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -147,4 +151,5 @@ jobs:
           name: merchant-local-inventory-audit
           path: out/
           if-no-files-found: warn
+
 
