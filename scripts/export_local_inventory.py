@@ -411,6 +411,51 @@ def write_tsv(path: Path, rows: List[Dict[str, Any]]) -> None:
             writer.writerow({name: row.get(key, "") for name, key in field_map})
 
 
+
+def calculate_supplemental_rows(variants: List[ShopifyVariant]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for variant in variants:
+        if not variant.sku.strip():
+            continue
+        if variant.product_status != "ACTIVE":
+            continue
+
+        qty_by_location = mapped_quantities(variant)
+        mapped_total_qty = sum(qty_by_location.values())
+        total_qty = max(int(variant.inventory_quantity or 0), mapped_total_qty)
+
+        price, sale_price = merchant_price_for_variant(variant)
+
+        rows.append(
+            {
+                "id": variant.merchant_offer_id,
+                "availability": "in_stock" if total_qty > 0 else "out_of_stock",
+                "price": price,
+                "sale_price": sale_price,
+                "sell_on_google_quantity": total_qty,
+                "sku": variant.sku,
+                "product_title": variant.product_title,
+                "product_status": variant.product_status,
+            }
+        )
+    return rows
+
+
+def write_supplemental_tsv(path: Path, rows: List[Dict[str, Any]]) -> None:
+    field_map = [
+        ("id", "id"),
+        ("availability", "availability"),
+        ("price", "price"),
+        ("sale price", "sale_price"),
+        ("sell on google quantity", "sell_on_google_quantity"),
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[name for name, _key in field_map], delimiter="\t")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(key, "") for name, key in field_map})
+
 def merchant_price_from_czk(price: str) -> Dict[str, str]:
     parts = str(price).split()
     amount = Decimal(parts[0]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -583,7 +628,8 @@ def main() -> int:
             continue
         rows.extend(calculate_local_rows(variant))
 
-        supplemental_rows = calculate_supplemental_rows(variants)
+
+    supplemental_rows = calculate_supplemental_rows(variants)
 
     write_supplemental_tsv(OUT_DIR / "SUPPLEMENTAL_SOURCE_3.tsv", supplemental_rows)
     write_csv(OUT_DIR / "supplemental_source_3_preview.csv", supplemental_rows)
@@ -603,8 +649,7 @@ def main() -> int:
             raise RuntimeError(f"No rows found for upload SKU {args.upload_sku}")
 
     summary = {
-        "shopify_variants_total": len(variants),
-                "supplemental_rows": len(supplemental_rows),
+        "shopify_variants_total": len(variants),`r`n        "supplemental_rows": len(supplemental_rows),
         "local_inventory_rows": len(rows),
         "unique_offer_ids_in_upload": len({row["id"] for row in rows}),
         "skipped_missing_sku": len(skipped_missing_sku),
@@ -618,8 +663,7 @@ def main() -> int:
         "shopify_page_size": SHOPIFY_PAGE_SIZE,
         "google_language": GOOGLE_LANGUAGE,
         "google_feed_label": GOOGLE_FEED_LABEL,
-        "merchant_product_key_mode": MERCHANT_PRODUCT_KEY_MODE,
-                "supplemental_template": ["id", "availability", "price", "sale price", "sell on google quantity"],
+        "merchant_product_key_mode": MERCHANT_PRODUCT_KEY_MODE,`r`n        "supplemental_template": ["id", "availability", "price", "sale price", "sell on google quantity"],
         "local_inventory_template": ["id", "store code", "availability", "price", "sale price", "quantity", "pickup method", "pickup SLA", "instore product location", "local shipping label"],
     }
 
@@ -642,6 +686,7 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+
 
 
 
