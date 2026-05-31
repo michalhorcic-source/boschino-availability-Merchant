@@ -583,8 +583,12 @@ def main() -> int:
             continue
         rows.extend(calculate_local_rows(variant))
 
+        supplemental_rows = calculate_supplemental_rows(variants)
+
+    write_supplemental_tsv(OUT_DIR / "SUPPLEMENTAL_SOURCE_3.tsv", supplemental_rows)
+    write_csv(OUT_DIR / "supplemental_source_3_preview.csv", supplemental_rows)
+
     write_tsv(OUT_DIR / "LOCAL_INVENTORY.tsv", rows)
-    write_tsv(OUT_DIR / "UPLOAD_SUPPLEMENTAL_SOURCE_3.tsv", rows)
     write_csv(OUT_DIR / "local_inventory_shopify_preview.csv", rows)
     write_csv(OUT_DIR / "skipped_missing_sku.csv", skipped_missing_sku)
     write_csv(OUT_DIR / "skipped_inactive_product.csv", skipped_inactive)
@@ -600,6 +604,7 @@ def main() -> int:
 
     summary = {
         "shopify_variants_total": len(variants),
+                "supplemental_rows": len(supplemental_rows),
         "local_inventory_rows": len(rows),
         "unique_offer_ids_in_upload": len({row["id"] for row in rows}),
         "skipped_missing_sku": len(skipped_missing_sku),
@@ -614,6 +619,7 @@ def main() -> int:
         "google_language": GOOGLE_LANGUAGE,
         "google_feed_label": GOOGLE_FEED_LABEL,
         "merchant_product_key_mode": MERCHANT_PRODUCT_KEY_MODE,
+                "supplemental_template": ["id", "availability", "price", "sale price", "sell on google quantity"],
         "local_inventory_template": ["id", "store code", "availability", "price", "sale price", "quantity", "pickup method", "pickup SLA", "instore product location", "local shipping label"],
     }
 
@@ -636,6 +642,7 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+
 
 
 
