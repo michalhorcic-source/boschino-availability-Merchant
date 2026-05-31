@@ -528,9 +528,13 @@ def upload_local_inventory(rows: List[Dict[str, Any]], limit: Optional[int] = No
     for index, row in enumerate(upload_rows, start=1):
         resolved = resolve_product_parent(row["id"], headers, product_cache)
         parent = resolved["parent"]
-        url = f"https://merchantapi.googleapis.com/inventories/v1/{quote(parent, safe='/~:_-')}/localInventories:insert"
+        product_segment = parent.split("/products/", 1)[1]
+        inventory_parent_url = f"https://merchantapi.googleapis.com/inventories/v1/accounts/{MERCHANT_ID}/products/{quote(product_segment, safe='')}"
+        list_url = f"{inventory_parent_url}/localInventories"
+        list_status_code, list_payload, list_text = request_json_with_retry("GET", list_url, headers, timeout=45, max_retries=3)
+        url = f"{inventory_parent_url}/localInventories:insert"
         body = merchant_local_inventory_body(row)
-        payload_audit.append({"row_index": index, "id": row.get("id", ""), "sku": row.get("sku", ""), "store_code": row.get("store_code", ""), "resolved_parent": parent, "product_lookup_found": resolved.get("found"), "body": body})
+        payload_audit.append({"row_index": index, "id": row.get("id", ""), "sku": row.get("sku", ""), "store_code": row.get("store_code", ""), "resolved_parent": parent, "inventory_list_url": list_url, "inventory_list_status_code": list_status_code, "inventory_list_response": list_text[:1200], "insert_url": url, "product_lookup_found": resolved.get("found"), "body": body})
 
         if not resolved.get("found"):
             errors.append({"row_index": index, "id": row.get("id", ""), "store_code": row.get("store_code", ""), "status_code": 404, "resolved_parent": parent, "response": json.dumps({"message": "Product parent was not found before local inventory upload", "checked": resolved.get("checked", [])}, ensure_ascii=False)[:4000]})
@@ -540,7 +544,7 @@ def upload_local_inventory(rows: List[Dict[str, Any]], limit: Optional[int] = No
         status_code, payload, text = request_json_with_retry("POST", url, headers, json_body=body, timeout=60, max_retries=5)
 
         if status_code >= 400:
-            errors.append({"row_index": index, "id": row.get("id", ""), "store_code": row.get("store_code", ""), "status_code": status_code, "resolved_parent": parent, "response": text[:4000]})
+            errors.append({"row_index": index, "id": row.get("id", ""), "store_code": row.get("store_code", ""), "status_code": status_code, "resolved_parent": parent, "insert_url": url, "inventory_list_status_code": list_status_code, "inventory_list_response": list_text[:1200], "response": text[:4000]})
             print(f"Local inventory upload error {status_code}: {row.get('id')} store={row.get('store_code')}", flush=True)
             continue
 
@@ -632,5 +636,6 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+
 
 
