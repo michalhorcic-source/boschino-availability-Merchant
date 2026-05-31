@@ -528,7 +528,7 @@ def upload_local_inventory(rows: List[Dict[str, Any]], limit: Optional[int] = No
     for index, row in enumerate(upload_rows, start=1):
         resolved = resolve_product_parent(row["id"], headers, product_cache)
         parent = resolved["parent"]
-        product_segment = parent.split("/products/", 1)[1]
+        product_segment = resolved["product_key"]
         inventory_parent_url = f"https://merchantapi.googleapis.com/inventories/v1/accounts/{MERCHANT_ID}/products/{quote(product_segment, safe='')}"
         list_url = f"{inventory_parent_url}/localInventories"
         list_status_code, list_payload, list_text = request_json_with_retry("GET", list_url, headers, timeout=45, max_retries=3)
@@ -636,6 +636,7 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+
 
 
 
