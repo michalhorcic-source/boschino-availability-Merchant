@@ -649,7 +649,8 @@ def main() -> int:
             raise RuntimeError(f"No rows found for upload SKU {args.upload_sku}")
 
     summary = {
-        "shopify_variants_total": len(variants),`r`n        "supplemental_rows": len(supplemental_rows),
+        "shopify_variants_total": len(variants),
+        "supplemental_rows": len(supplemental_rows),
         "local_inventory_rows": len(rows),
         "unique_offer_ids_in_upload": len({row["id"] for row in rows}),
         "skipped_missing_sku": len(skipped_missing_sku),
@@ -663,7 +664,8 @@ def main() -> int:
         "shopify_page_size": SHOPIFY_PAGE_SIZE,
         "google_language": GOOGLE_LANGUAGE,
         "google_feed_label": GOOGLE_FEED_LABEL,
-        "merchant_product_key_mode": MERCHANT_PRODUCT_KEY_MODE,`r`n        "supplemental_template": ["id", "availability", "price", "sale price", "sell on google quantity"],
+        "merchant_product_key_mode": MERCHANT_PRODUCT_KEY_MODE,
+        "supplemental_template": ["id", "availability", "price", "sale price", "sell on google quantity"],
         "local_inventory_template": ["id", "store code", "availability", "price", "sale price", "quantity", "pickup method", "pickup SLA", "instore product location", "local shipping label"],
     }
 
@@ -686,6 +688,7 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise
+
 
 
 
