@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       upload:
-        description: "Compatibility only. Ignored; workflow generates feed files and does not call Merchant API."
+        description: "Compatibility only. Ignored; workflow generates public feed files and does not call Merchant API."
         required: true
         default: "false"
         type: choice
@@ -24,6 +24,12 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: merchant-feed-pages
+  cancel-in-progress: false
 
 jobs:
   generate-merchant-feeds:
@@ -74,6 +80,32 @@ jobs:
           print('Feed headers validated.')
           PY
 
+      - name: Prepare public feed site
+        run: |
+          mkdir -p public
+          cp out/SUPPLEMENTAL_SOURCE_3.tsv public/SUPPLEMENTAL_SOURCE_3.tsv
+          cp out/LOCAL_INVENTORY.tsv public/LOCAL_INVENTORY.tsv
+          cp out/summary.json public/summary.json
+          cp out/control_sku_8996470703070.csv public/control_sku_8996470703070.csv
+          cat > public/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>Boschino Merchant feeds</title>
+          </head>
+          <body>
+            <h1>Boschino Merchant feeds</h1>
+            <ul>
+              <li><a href="SUPPLEMENTAL_SOURCE_3.tsv">SUPPLEMENTAL_SOURCE_3.tsv</a></li>
+              <li><a href="LOCAL_INVENTORY.tsv">LOCAL_INVENTORY.tsv</a></li>
+              <li><a href="summary.json">summary.json</a></li>
+              <li><a href="control_sku_8996470703070.csv">control_sku_8996470703070.csv</a></li>
+            </ul>
+          </body>
+          </html>
+          HTML
+
       - name: Upload feed artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -90,3 +122,15 @@ jobs:
             out/summary.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
