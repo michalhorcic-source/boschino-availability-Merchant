@@ -1,4 +1,4 @@
-name: Merchant local inventory validation and upload
+name: Merchant feed generation
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       upload:
-        description: "Upload to Merchant Center API"
+        description: "Compatibility only. Ignored; workflow generates feed files and does not call Merchant API."
         required: true
         default: "false"
         type: choice
@@ -14,32 +14,25 @@ on:
           - "false"
           - "true"
       upload_limit:
-        description: "Optional row limit for test upload; 0 means all rows"
+        description: "Compatibility only. Ignored; 0 means full feed generation."
         required: true
         default: "0"
       upload_sku:
-        description: "Optional SKU filter for targeted test upload"
+        description: "Compatibility only. Ignored for full feed generation."
         required: false
         default: ""
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  export-local-inventory:
+  generate-merchant-feeds:
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -49,8 +42,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run dry-run validation
-        if: ${{ github.event.inputs.upload != 'true' }}
+      - name: Generate supplemental and local inventory feeds
         env:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
           SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP }}
@@ -60,28 +52,41 @@ jobs:
           GOOGLE_FEED_LABEL: CZK_105791684939
         run: python scripts/export_local_inventory.py
 
-      - name: Run upload
-        if: ${{ github.event.inputs.upload == 'true' }}
-        env:
-          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
-          SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP }}
-          SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
-          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
-          GOOGLE_LANGUAGE: cs
-          GOOGLE_FEED_LABEL: CZK_105791684939
+      - name: Validate generated feed files
         run: |
-          LIMIT="${{ github.event.inputs.upload_limit }}"
-          if [ -z "$LIMIT" ]; then LIMIT="0"; fi
-          if [ "$LIMIT" = "0" ]; then
-            python scripts/export_local_inventory.py --upload --upload-sku "${{ github.event.inputs.upload_sku }}"
-          else
-            python scripts/export_local_inventory.py --upload --upload-limit "$LIMIT" --upload-sku "${{ github.event.inputs.upload_sku }}"
-          fi
+          test -s out/SUPPLEMENTAL_SOURCE_3.tsv
+          test -s out/LOCAL_INVENTORY.tsv
+          test -s out/summary.json
+          python - <<'PY'
+          import csv
+          from pathlib import Path
 
-      - name: Upload audit artifacts
+          checks = [
+              (Path('out/SUPPLEMENTAL_SOURCE_3.tsv'), ['id', 'availability', 'price', 'sale price', 'sell on google quantity']),
+              (Path('out/LOCAL_INVENTORY.tsv'), ['id', 'store code', 'availability', 'price', 'sale price', 'quantity', 'pickup method', 'pickup SLA', 'instore product location', 'local shipping label']),
+          ]
+          for path, expected in checks:
+              with path.open('r', encoding='utf-8', newline='') as handle:
+                  reader = csv.reader(handle, delimiter='\t')
+                  header = next(reader)
+              if header != expected:
+                  raise SystemExit(f'{path}: unexpected header {header!r}, expected {expected!r}')
+          print('Feed headers validated.')
+          PY
+
+      - name: Upload feed artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: merchant-local-inventory-audit
-          path: out/
-          if-no-files-found: warn
+          name: merchant-feed-files
+          path: |
+            out/SUPPLEMENTAL_SOURCE_3.tsv
+            out/LOCAL_INVENTORY.tsv
+            out/supplemental_source_3_preview.csv
+            out/local_inventory_shopify_preview.csv
+            out/control_sku_8996470703070.csv
+            out/skipped_missing_sku.csv
+            out/skipped_inactive_product.csv
+            out/summary.json
+          if-no-files-found: error
+          retention-days: 14
