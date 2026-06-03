@@ -3,6 +3,10 @@
 
 Local inventory remains a file feed. This script handles only the product-level
 supplemental attributes: availability, price, sale price, sell on google quantity.
+
+The upload is intentionally resumable through --offset and --limit. Merchant API
+can occasionally time out on individual productInputs.insert requests, so network
+exceptions are retried and then recorded per row instead of crashing the whole job.
 """
 
 from __future__ import annotations
@@ -47,26 +51,46 @@ def merchant_headers() -> Dict[str, str]:
     }
 
 
-def request_json(method: str, url: str, headers: Dict[str, str], *, body: Optional[Dict[str, Any]] = None, max_retries: int = 5) -> Dict[str, Any]:
+def request_json(method: str, url: str, headers: Dict[str, str], *, body: Optional[Dict[str, Any]] = None, max_retries: int = 6) -> Dict[str, Any]:
     last: Dict[str, Any] = {}
     for attempt in range(1, max_retries + 1):
-        response = requests.request(method, url, headers=headers, json=body, timeout=90)
         try:
-            payload = response.json()
-        except Exception:
-            payload = {"raw_text": response.text}
-        result = {
-            "ok": response.status_code < 400,
-            "status_code": response.status_code,
-            "url": response.url,
-            "payload": payload,
-            "raw_text": response.text[:4000],
-        }
-        last = result
-        if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
-            time.sleep(min(60, 2 ** attempt))
-            continue
-        return result
+            response = requests.request(method, url, headers=headers, json=body, timeout=(15, 45))
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {"raw_text": response.text}
+            result = {
+                "ok": response.status_code < 400,
+                "status_code": response.status_code,
+                "url": response.url,
+                "payload": payload,
+                "raw_text": response.text[:4000],
+                "attempts": attempt,
+            }
+            last = result
+            if response.status_code in (408, 409, 429, 500, 502, 503, 504) and attempt < max_retries:
+                wait_seconds = min(90, 2 ** attempt)
+                print(f"Transient Merchant API HTTP {response.status_code}; attempt {attempt}/{max_retries}; waiting {wait_seconds}s", flush=True)
+                time.sleep(wait_seconds)
+                continue
+            return result
+        except requests.exceptions.RequestException as exc:
+            result = {
+                "ok": False,
+                "status_code": 598,
+                "url": url,
+                "payload": {"exception": exc.__class__.__name__, "message": str(exc)},
+                "raw_text": f"{exc.__class__.__name__}: {str(exc)[:3800]}",
+                "attempts": attempt,
+            }
+            last = result
+            if attempt < max_retries:
+                wait_seconds = min(90, 2 ** attempt)
+                print(f"Transient Merchant API exception {exc.__class__.__name__}; attempt {attempt}/{max_retries}; waiting {wait_seconds}s", flush=True)
+                time.sleep(wait_seconds)
+                continue
+            return result
     return last
 
 
@@ -141,33 +165,52 @@ def row_to_product_input(row: Dict[str, str], language: str, feed_label: str) ->
     }
 
 
-def upload_rows(path: Path, account_id: str, language: str, feed_label: str, data_source_name: str, headers: Dict[str, str], limit: int = 0) -> Dict[str, Any]:
+def upload_rows(path: Path, account_id: str, language: str, feed_label: str, data_source_name: str, headers: Dict[str, str], limit: int = 0, offset: int = 0) -> Dict[str, Any]:
     url = f"{PRODUCTS_BASE}/accounts/{quote(account_id, safe='')}/productInputs:insert?dataSource={quote(data_source_name, safe='')}"
     uploaded = 0
+    skipped = 0
+    processed = 0
     errors: List[Dict[str, Any]] = []
     sample_results: List[Dict[str, Any]] = []
     payload_audit: List[Dict[str, Any]] = []
+    started = time.time()
 
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         for index, row in enumerate(reader, start=1):
-            if limit and uploaded >= limit:
+            if index <= offset:
+                skipped += 1
+                continue
+            if limit and processed >= limit:
                 break
+            processed += 1
             body = row_to_product_input(row, language, feed_label)
             payload_audit.append({"row_index": index, "id": row.get("id", ""), "body": json.dumps(body, ensure_ascii=False)})
-            result = request_json("POST", url, headers, body=body, max_retries=4)
+            result = request_json("POST", url, headers, body=body, max_retries=6)
             if result["ok"]:
                 uploaded += 1
                 if len(sample_results) < 5:
-                    sample_results.append({"row_index": index, "id": row.get("id", ""), "status_code": result["status_code"], "response": result["payload"]})
+                    sample_results.append({"row_index": index, "id": row.get("id", ""), "status_code": result["status_code"], "attempts": result.get("attempts"), "response": result["payload"]})
             else:
-                errors.append({"row_index": index, "id": row.get("id", ""), "status_code": result["status_code"], "response": result["raw_text"]})
+                errors.append({"row_index": index, "id": row.get("id", ""), "status_code": result["status_code"], "attempts": result.get("attempts"), "response": result["raw_text"]})
                 if len(errors) >= 25:
                     break
+            if processed % 100 == 0:
+                elapsed = max(1.0, time.time() - started)
+                print(f"Supplemental API progress: offset={offset} processed={processed} uploaded={uploaded} errors={len(errors)} rate={processed/elapsed:.2f} rows/s", flush=True)
 
     write_csv(OUT_DIR / "supplemental_api_payload_audit.csv", payload_audit)
     write_csv(OUT_DIR / "supplemental_api_errors.csv", errors)
-    return {"uploaded_rows": uploaded, "errors": len(errors), "sample_results": sample_results, "data_source": data_source_name}
+    return {
+        "offset": offset,
+        "limit": limit,
+        "skipped_rows": skipped,
+        "processed_rows": processed,
+        "uploaded_rows": uploaded,
+        "errors": len(errors),
+        "sample_results": sample_results,
+        "data_source": data_source_name,
+    }
 
 
 def write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
@@ -192,6 +235,7 @@ def main() -> int:
     parser.add_argument("--data-source", default=os.getenv("SUPPLEMENTAL_API_DATA_SOURCE", ""))
     parser.add_argument("--display-name", default=os.getenv("SUPPLEMENTAL_API_DISPLAY_NAME", "SUPPLEMENTAL_SOURCE_3_API"))
     parser.add_argument("--limit", type=int, default=int(os.getenv("SUPPLEMENTAL_API_UPLOAD_LIMIT", "0") or "0"))
+    parser.add_argument("--offset", type=int, default=int(os.getenv("SUPPLEMENTAL_API_UPLOAD_OFFSET", "0") or "0"))
     parser.add_argument("--no-create", action="store_true")
     args = parser.parse_args()
 
@@ -202,7 +246,7 @@ def main() -> int:
     headers = merchant_headers()
     data_source = resolve_data_source(args.account_id, headers, args.display_name, args.data_source, create_missing=not args.no_create)
     data_source_name = data_source["name"]
-    result = upload_rows(Path(args.feed_file), args.account_id, args.language, args.feed_label, data_source_name, headers, limit=args.limit)
+    result = upload_rows(Path(args.feed_file), args.account_id, args.language, args.feed_label, data_source_name, headers, limit=args.limit, offset=args.offset)
 
     summary = {
         "account_id": args.account_id,
@@ -213,7 +257,7 @@ def main() -> int:
     }
     (OUT_DIR / "supplemental_api_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
-    return 0
+    return 1 if result.get("errors") else 0
 
 
 if __name__ == "__main__":
