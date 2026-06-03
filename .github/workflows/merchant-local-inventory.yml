@@ -17,6 +17,10 @@ on:
         description: "Optional supplemental API upload row limit; 0 means all rows"
         required: true
         default: "0"
+      upload_offset:
+        description: "Optional supplemental API upload row offset for batched/resumable uploads"
+        required: true
+        default: "0"
       upload_sku:
         description: "Compatibility only. Ignored for full feed generation."
         required: false
@@ -97,8 +101,10 @@ jobs:
           SUPPLEMENTAL_API_DISPLAY_NAME: SUPPLEMENTAL_SOURCE_3_API
         run: |
           LIMIT="${{ github.event.inputs.upload_limit }}"
+          OFFSET="${{ github.event.inputs.upload_offset }}"
           if [ -z "$LIMIT" ]; then LIMIT="0"; fi
-          python scripts/upload_supplemental_api.py --limit "$LIMIT"
+          if [ -z "$OFFSET" ]; then OFFSET="0"; fi
+          python scripts/upload_supplemental_api.py --limit "$LIMIT" --offset "$OFFSET"
 
       - name: Prepare public feed site
         run: |
