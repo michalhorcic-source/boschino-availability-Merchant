@@ -42,6 +42,7 @@ class ShopifyVariant:
     price: str
     compare_at_price: str
     inventory_quantity: int
+    available_for_sale: bool
     product_title: str
     product_status: str
     product_total_inventory: int
@@ -134,7 +135,7 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
       productVariants(first: $pageSize, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          id sku title price compareAtPrice inventoryQuantity
+          id sku title price compareAtPrice inventoryQuantity availableForSale
           variantAvailability: metafield(namespace: "custom", key: "availability") { value }
           variantDostupnost: metafield(namespace: "custom", key: "dostupnost") { value }
           product {
@@ -168,6 +169,7 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
                 price=str(node.get("price") or "0"),
                 compare_at_price=str(node.get("compareAtPrice") or ""),
                 inventory_quantity=int(node.get("inventoryQuantity") or 0),
+                available_for_sale=bool(node.get("availableForSale")),
                 product_title=product.get("title", ""),
                 product_status=product.get("status", ""),
                 product_total_inventory=int(product.get("totalInventory") or 0),
@@ -290,7 +292,7 @@ def calculate_supplemental_rows(variants: List[ShopifyVariant]) -> List[Dict[str
         central = central_available(variant, mapped_total)
         text_available = positive_text(variant)
         total_qty = max(int(variant.inventory_quantity or 0), mapped_total)
-        overall_available = total_qty > 0 or central or text_available
+        overall_available = total_qty > 0 or central or text_available or variant.available_for_sale
         price, sale_price = merchant_price_for_variant(variant)
         rows.append({
             "id": variant.merchant_offer_id,
@@ -303,6 +305,7 @@ def calculate_supplemental_rows(variants: List[ShopifyVariant]) -> List[Dict[str
             "product_status": variant.product_status,
             "central_available": central,
             "text_available": text_available,
+            "shopify_available_for_sale": variant.available_for_sale,
             "shopify_availability_text": first_metafield_value(variant.variant_availability, variant.product_availability),
         })
     return rows
