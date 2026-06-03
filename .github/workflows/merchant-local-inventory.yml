@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       upload:
-        description: "Compatibility only. Ignored; workflow generates public feed files and does not call Merchant API."
+        description: "Upload supplemental product data through Merchant API"
         required: true
         default: "false"
         type: choice
@@ -14,7 +14,7 @@ on:
           - "false"
           - "true"
       upload_limit:
-        description: "Compatibility only. Ignored; 0 means full feed generation."
+        description: "Optional supplemental API upload row limit; 0 means all rows"
         required: true
         default: "0"
       upload_sku:
@@ -80,6 +80,26 @@ jobs:
           print('Feed headers validated.')
           PY
 
+      - name: Authenticate to Google Cloud
+        if: ${{ github.event.inputs.upload == 'true' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Upload supplemental feed through Merchant API
+        if: ${{ github.event.inputs.upload == 'true' }}
+        env:
+          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
+          GOOGLE_LANGUAGE: cs
+          GOOGLE_FEED_LABEL: CZK_105791684939
+          SUPPLEMENTAL_API_DATA_SOURCE: ${{ vars.SUPPLEMENTAL_API_DATA_SOURCE || '' }}
+          SUPPLEMENTAL_API_DISPLAY_NAME: SUPPLEMENTAL_SOURCE_3_API
+        run: |
+          LIMIT="${{ github.event.inputs.upload_limit }}"
+          if [ -z "$LIMIT" ]; then LIMIT="0"; fi
+          python scripts/upload_supplemental_api.py --limit "$LIMIT"
+
       - name: Prepare public feed site
         run: |
           mkdir -p public
@@ -87,6 +107,7 @@ jobs:
           cp out/LOCAL_INVENTORY.tsv public/LOCAL_INVENTORY.tsv
           cp out/summary.json public/summary.json
           cp out/control_sku_8996470703070.csv public/control_sku_8996470703070.csv
+          if [ -f out/supplemental_api_summary.json ]; then cp out/supplemental_api_summary.json public/supplemental_api_summary.json; fi
           cat > public/index.html <<'HTML'
           <!doctype html>
           <html lang="en">
@@ -101,6 +122,7 @@ jobs:
               <li><a href="LOCAL_INVENTORY.tsv">LOCAL_INVENTORY.tsv</a></li>
               <li><a href="summary.json">summary.json</a></li>
               <li><a href="control_sku_8996470703070.csv">control_sku_8996470703070.csv</a></li>
+              <li><a href="supplemental_api_summary.json">supplemental_api_summary.json</a></li>
             </ul>
           </body>
           </html>
@@ -120,7 +142,10 @@ jobs:
             out/skipped_missing_sku.csv
             out/skipped_inactive_product.csv
             out/summary.json
-          if-no-files-found: error
+            out/supplemental_api_summary.json
+            out/supplemental_api_payload_audit.csv
+            out/supplemental_api_errors.csv
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Configure GitHub Pages
