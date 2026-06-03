@@ -113,6 +113,7 @@ jobs:
           cp out/LOCAL_INVENTORY.tsv public/LOCAL_INVENTORY.tsv
           cp out/summary.json public/summary.json
           cp out/control_sku_8996470703070.csv public/control_sku_8996470703070.csv
+          if [ -f out/control_variant_56264244887883_supplemental.csv ]; then cp out/control_variant_56264244887883_supplemental.csv public/control_variant_56264244887883_supplemental.csv; fi
           if [ -f out/supplemental_api_summary.json ]; then cp out/supplemental_api_summary.json public/supplemental_api_summary.json; fi
           cat > public/index.html <<'HTML'
           <!doctype html>
@@ -128,6 +129,7 @@ jobs:
               <li><a href="LOCAL_INVENTORY.tsv">LOCAL_INVENTORY.tsv</a></li>
               <li><a href="summary.json">summary.json</a></li>
               <li><a href="control_sku_8996470703070.csv">control_sku_8996470703070.csv</a></li>
+              <li><a href="control_variant_56264244887883_supplemental.csv">control_variant_56264244887883_supplemental.csv</a></li>
               <li><a href="supplemental_api_summary.json">supplemental_api_summary.json</a></li>
             </ul>
           </body>
@@ -145,6 +147,7 @@ jobs:
             out/supplemental_source_3_preview.csv
             out/local_inventory_shopify_preview.csv
             out/control_sku_8996470703070.csv
+            out/control_variant_56264244887883_supplemental.csv
             out/skipped_missing_sku.csv
             out/skipped_inactive_product.csv
             out/summary.json
