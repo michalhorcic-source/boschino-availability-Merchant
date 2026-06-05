@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -21,6 +21,7 @@ SHOPIFY_PAGE_SLEEP_SECONDS = float(os.getenv("SHOPIFY_PAGE_SLEEP_SECONDS", "0.35
 GOOGLE_LANGUAGE = os.getenv("GOOGLE_LANGUAGE", "cs")
 GOOGLE_FEED_LABEL = os.getenv("GOOGLE_FEED_LABEL", "CZK_105791684939")
 OUT_DIR = Path("out")
+EXCLUDED_OFFER_IDS_PATH = Path("config/supplemental_excluded_offer_ids.txt")
 
 CENTRAL_TEST_ID = "shopify_ZZ_15464863891787_56264244887883"
 
@@ -75,6 +76,18 @@ def first_metafield_value(*values: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def load_excluded_offer_ids(path: Path = EXCLUDED_OFFER_IDS_PATH) -> Set[str]:
+    if not path.exists():
+        return set()
+    excluded: Set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = line.strip()
+        if not value or value.startswith("#"):
+            continue
+        excluded.add(value)
+    return excluded
 
 
 def load_shopify_token() -> str:
@@ -191,10 +204,20 @@ def merchant_price_for_variant(variant: ShopifyVariant) -> Tuple[str, str]:
     return f"{regular} CZK", (f"{sale} CZK" if sale > 0 else "")
 
 
-def calculate_supplemental_rows(variants: List[ShopifyVariant]) -> List[Dict[str, Any]]:
+def calculate_supplemental_rows(variants: List[ShopifyVariant], excluded_offer_ids: Set[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     rows: List[Dict[str, Any]] = []
+    skipped_excluded: List[Dict[str, Any]] = []
     for variant in variants:
         if not variant.sku.strip() or variant.product_status != "ACTIVE":
+            continue
+        if variant.merchant_offer_id in excluded_offer_ids:
+            skipped_excluded.append({
+                "id": variant.merchant_offer_id,
+                "sku": variant.sku,
+                "product_title": variant.product_title,
+                "variant_title": variant.title,
+                "reason": "Merchant Center reported: Nabídka neexistuje",
+            })
             continue
         text_available = positive_text(variant)
         total_qty = max(int(variant.inventory_quantity or 0), int(variant.product_total_inventory or 0))
@@ -216,7 +239,7 @@ def calculate_supplemental_rows(variants: List[ShopifyVariant]) -> List[Dict[str
             "shopify_product_total_inventory": variant.product_total_inventory,
             "shopify_availability_text": first_metafield_value(variant.variant_availability, variant.product_availability),
         })
-    return rows
+    return rows, skipped_excluded
 
 
 def write_csv(path: Path, rows: List[Dict[str, Any]], fieldnames: Optional[List[str]] = None) -> None:
@@ -247,6 +270,7 @@ def write_tsv(path: Path, rows: List[Dict[str, Any]], field_map: List[Tuple[str,
 
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    excluded_offer_ids = load_excluded_offer_ids()
     variants = fetch_shopify_variants()
 
     skipped_missing_sku = [
@@ -260,7 +284,7 @@ def main() -> int:
         if variant.sku.strip() and variant.product_status != "ACTIVE"
     ]
 
-    supplemental_rows = calculate_supplemental_rows(variants)
+    supplemental_rows, skipped_excluded = calculate_supplemental_rows(variants, excluded_offer_ids)
     supplemental_map = [
         ("id", "id"),
         ("availability", "availability"),
@@ -273,6 +297,7 @@ def main() -> int:
     write_csv(OUT_DIR / "supplemental_source_3_preview.csv", supplemental_rows)
     write_csv(OUT_DIR / "skipped_missing_sku.csv", skipped_missing_sku)
     write_csv(OUT_DIR / "skipped_inactive_product.csv", skipped_inactive)
+    write_csv(OUT_DIR / "skipped_excluded_offer_ids.csv", skipped_excluded)
 
     control_rows = [row for row in supplemental_rows if row.get("id") == CENTRAL_TEST_ID]
     write_csv(OUT_DIR / "control_variant_56264244887883_supplemental.csv", control_rows)
@@ -285,6 +310,9 @@ def main() -> int:
         "out_of_stock_rows": sum(1 for row in supplemental_rows if row["availability"] == "out_of_stock"),
         "skipped_missing_sku": len(skipped_missing_sku),
         "skipped_inactive_product": len(skipped_inactive),
+        "excluded_offer_ids_configured": len(excluded_offer_ids),
+        "skipped_excluded_offer_ids": len(skipped_excluded),
+        "skipped_excluded_offer_ids_sample": skipped_excluded[:20],
         "control_variant_56264244887883_supplemental": control_rows,
         "shopify_page_size": SHOPIFY_PAGE_SIZE,
         "google_language": GOOGLE_LANGUAGE,
