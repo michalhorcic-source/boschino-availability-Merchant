@@ -94,6 +94,14 @@ def request_json(method: str, url: str, headers: Dict[str, str], *, body: Option
     return last
 
 
+def is_expired_token_error(result: Dict[str, Any]) -> bool:
+    if result.get("status_code") != 401:
+        return False
+    text = str(result.get("raw_text") or "")
+    payload = result.get("payload") or {}
+    return "ACCESS_TOKEN_EXPIRED" in text or "UNAUTHENTICATED" in text or "ACCESS_TOKEN_EXPIRED" in json.dumps(payload)
+
+
 def list_data_sources(account_id: str, headers: Dict[str, str]) -> List[Dict[str, Any]]:
     url = f"{DATASOURCES_BASE}/accounts/{quote(account_id, safe='')}/dataSources"
     sources: List[Dict[str, Any]] = []
@@ -174,6 +182,7 @@ def upload_rows(path: Path, account_id: str, language: str, feed_label: str, dat
     sample_results: List[Dict[str, Any]] = []
     payload_audit: List[Dict[str, Any]] = []
     started = time.time()
+    token_refreshed_at = time.time()
 
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -186,7 +195,22 @@ def upload_rows(path: Path, account_id: str, language: str, feed_label: str, dat
             processed += 1
             body = row_to_product_input(row, language, feed_label)
             payload_audit.append({"row_index": index, "id": row.get("id", ""), "body": json.dumps(body, ensure_ascii=False)})
+
+            # GitHub Workload Identity access tokens are short-lived. A 2,000-row
+            # batch can run for more than an hour, so refresh the token periodically
+            # and immediately retry once if Merchant reports ACCESS_TOKEN_EXPIRED.
+            if processed == 1 or processed % 250 == 1 or (time.time() - token_refreshed_at) > 1800:
+                headers = merchant_headers()
+                token_refreshed_at = time.time()
+                print(f"Refreshed Merchant API token at processed={processed}", flush=True)
+
             result = request_json("POST", url, headers, body=body, max_retries=6)
+            if is_expired_token_error(result):
+                print(f"Merchant API token expired at row_index={index}; refreshing and retrying once", flush=True)
+                headers = merchant_headers()
+                token_refreshed_at = time.time()
+                result = request_json("POST", url, headers, body=body, max_retries=6)
+
             if result["ok"]:
                 uploaded += 1
                 if len(sample_results) < 5:
