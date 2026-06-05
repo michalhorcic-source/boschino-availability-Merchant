@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 import os
@@ -20,18 +19,11 @@ SHOPIFY_GRAPHQL_URL = f"https://{SHOPIFY_SHOP_DOMAIN}/admin/api/{SHOPIFY_API_VER
 SHOPIFY_PAGE_SIZE = int(os.getenv("SHOPIFY_PAGE_SIZE", "50"))
 SHOPIFY_PAGE_SLEEP_SECONDS = float(os.getenv("SHOPIFY_PAGE_SLEEP_SECONDS", "0.35"))
 GOOGLE_LANGUAGE = os.getenv("GOOGLE_LANGUAGE", "cs")
-GOOGLE_FEED_LABEL = os.getenv("GOOGLE_FEED_LABEL", "CZ")
+GOOGLE_FEED_LABEL = os.getenv("GOOGLE_FEED_LABEL", "CZK_105791684939")
 OUT_DIR = Path("out")
 
-LOCATION_TO_STORE_CODE = {
-    "gid://shopify/Location/115128074571": "06275645225922442974",
-    "gid://shopify/Location/115128107339": "06824451997053158379",
-    "gid://shopify/Location/115128140107": "14326918149907693002",
-}
-
-TEST_SKU = "8996470703070"
-TEST_MERCHANT_OFFER_ID = "shopify_ZZ_15493147984203_56386003730763"
 CENTRAL_TEST_ID = "shopify_ZZ_15464863891787_56264244887883"
+
 
 @dataclass
 class ShopifyVariant:
@@ -48,7 +40,6 @@ class ShopifyVariant:
     product_total_inventory: int
     product_availability: str
     variant_availability: str
-    inventory_levels: List[Dict[str, Any]]
 
     @property
     def product_number(self) -> str:
@@ -131,7 +122,7 @@ def shopify_graphql(query: str, variables: Optional[Dict[str, Any]] = None, max_
 
 def fetch_shopify_variants() -> List[ShopifyVariant]:
     query = """
-    query ProductVariantsForLocalInventory($cursor: String, $pageSize: Int!) {
+    query ProductVariantsForSupplementalFeed($cursor: String, $pageSize: Int!) {
       productVariants(first: $pageSize, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -142,11 +133,6 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
             id title status totalInventory
             productAvailability: metafield(namespace: "custom", key: "availability") { value }
             productDostupnostCustom: metafield(namespace: "custom", key: "dostupnost") { value }
-          }
-          inventoryItem {
-            inventoryLevels(first: 20) {
-              nodes { location { id } quantities(names: ["available"]) { name quantity } }
-            }
           }
         }
       }
@@ -159,8 +145,6 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
         connection = data["productVariants"]
         for node in connection["nodes"]:
             product = node.get("product") or {}
-            inventory_item = node.get("inventoryItem") or {}
-            levels = (inventory_item.get("inventoryLevels") or {}).get("nodes") or []
             variants.append(ShopifyVariant(
                 gid=node.get("id", ""),
                 product_gid=product.get("id", ""),
@@ -175,7 +159,6 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
                 product_total_inventory=int(product.get("totalInventory") or 0),
                 product_availability=first_metafield_value(product.get("productAvailability"), product.get("productDostupnostCustom")),
                 variant_availability=first_metafield_value(node.get("variantAvailability"), node.get("variantDostupnost")),
-                inventory_levels=levels,
             ))
         print(f"Fetched Shopify variants: {len(variants)}", flush=True)
         if not connection["pageInfo"].get("hasNextPage"):
@@ -183,22 +166,6 @@ def fetch_shopify_variants() -> List[ShopifyVariant]:
         cursor = connection["pageInfo"].get("endCursor")
         time.sleep(SHOPIFY_PAGE_SLEEP_SECONDS)
     return variants
-
-
-def qty_from_level(level: Dict[str, Any]) -> int:
-    for item in level.get("quantities") or []:
-        if item.get("name") == "available":
-            return int(item.get("quantity") or 0)
-    return 0
-
-
-def mapped_quantities(variant: ShopifyVariant) -> Dict[str, int]:
-    result = {location_id: 0 for location_id in LOCATION_TO_STORE_CODE}
-    for level in variant.inventory_levels:
-        location_id = ((level.get("location") or {}).get("id") or "")
-        if location_id in result:
-            result[location_id] = qty_from_level(level)
-    return result
 
 
 def availability_text(variant: ShopifyVariant) -> str:
@@ -216,13 +183,6 @@ def positive_text(variant: ShopifyVariant) -> bool:
     return any(marker in text for marker in ["centr", "skladem", "in stock", "available"])
 
 
-def central_available(variant: ShopifyVariant, mapped_total_qty: int) -> bool:
-    text = availability_text(variant)
-    if "centr" in text and not negative_text(text):
-        return True
-    return variant.inventory_quantity > mapped_total_qty
-
-
 def merchant_price_for_variant(variant: ShopifyVariant) -> Tuple[str, str]:
     current = to_decimal(variant.price)
     compare = to_decimal(variant.compare_at_price)
@@ -231,68 +191,14 @@ def merchant_price_for_variant(variant: ShopifyVariant) -> Tuple[str, str]:
     return f"{regular} CZK", (f"{sale} CZK" if sale > 0 else "")
 
 
-def calculate_local_rows(variant: ShopifyVariant) -> List[Dict[str, Any]]:
-    quantities = mapped_quantities(variant)
-    mapped_total = sum(quantities.values())
-    central = central_available(variant, mapped_total)
-    price, sale_price = merchant_price_for_variant(variant)
-    rows: List[Dict[str, Any]] = []
-    for location_id, store_code in LOCATION_TO_STORE_CODE.items():
-        local_qty = quantities.get(location_id, 0)
-        if local_qty > 0:
-            availability = "limited_availability" if local_qty <= 2 else "in_stock"
-            pickup_method = "buy"
-            pickup_sla = "same day"
-            delivery_source = "local_store"
-        elif mapped_total > 0:
-            availability = "out_of_stock"
-            pickup_method = "ship to store"
-            pickup_sla = "next day"
-            delivery_source = "other_store"
-        elif central:
-            availability = "out_of_stock"
-            pickup_method = "ship to store"
-            pickup_sla = "multi-week"
-            delivery_source = "central_stock"
-        else:
-            availability = "out_of_stock"
-            pickup_method = "not supported"
-            pickup_sla = ""
-            delivery_source = "unavailable"
-        rows.append({
-            "id": variant.merchant_offer_id,
-            "sku": variant.sku,
-            "product_title": variant.product_title,
-            "product_status": variant.product_status,
-            "store_code": store_code,
-            "availability": availability,
-            "quantity": local_qty,
-            "price": price,
-            "sale_price": sale_price,
-            "pickup_method": pickup_method,
-            "pickup_sla": pickup_sla,
-            "instore_product_location": "",
-            "local_shipping_label": "",
-            "shopify_inventory_quantity": variant.inventory_quantity,
-            "mapped_locations_quantity": mapped_total,
-            "central_available": central,
-            "delivery_source": delivery_source,
-            "shopify_availability_text": first_metafield_value(variant.variant_availability, variant.product_availability),
-        })
-    return rows
-
-
 def calculate_supplemental_rows(variants: List[ShopifyVariant]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for variant in variants:
         if not variant.sku.strip() or variant.product_status != "ACTIVE":
             continue
-        quantities = mapped_quantities(variant)
-        mapped_total = sum(quantities.values())
-        central = central_available(variant, mapped_total)
         text_available = positive_text(variant)
-        total_qty = max(int(variant.inventory_quantity or 0), mapped_total)
-        overall_available = total_qty > 0 or central or text_available or variant.available_for_sale
+        total_qty = max(int(variant.inventory_quantity or 0), int(variant.product_total_inventory or 0))
+        overall_available = total_qty > 0 or text_available or variant.available_for_sale
         price, sale_price = merchant_price_for_variant(variant)
         rows.append({
             "id": variant.merchant_offer_id,
@@ -302,10 +208,12 @@ def calculate_supplemental_rows(variants: List[ShopifyVariant]) -> List[Dict[str
             "sell_on_google_quantity": total_qty,
             "sku": variant.sku,
             "product_title": variant.product_title,
+            "variant_title": variant.title,
             "product_status": variant.product_status,
-            "central_available": central,
             "text_available": text_available,
             "shopify_available_for_sale": variant.available_for_sale,
+            "shopify_inventory_quantity": variant.inventory_quantity,
+            "shopify_product_total_inventory": variant.product_total_inventory,
             "shopify_availability_text": first_metafield_value(variant.variant_availability, variant.product_availability),
         })
     return rows
@@ -338,60 +246,50 @@ def write_tsv(path: Path, rows: List[Dict[str, Any]], field_map: List[Tuple[str,
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--upload", action="store_true")
-    parser.add_argument("--upload-limit", type=int, default=0)
-    parser.add_argument("--upload-sku", default="")
-    args = parser.parse_args()
-
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     variants = fetch_shopify_variants()
-    local_rows: List[Dict[str, Any]] = []
-    skipped_missing_sku: List[Dict[str, Any]] = []
-    skipped_inactive: List[Dict[str, Any]] = []
-    for variant in variants:
-        if not variant.sku.strip():
-            skipped_missing_sku.append({"variant_gid": variant.gid, "product_gid": variant.product_gid, "title": variant.title})
-            continue
-        if variant.product_status != "ACTIVE":
-            skipped_inactive.append({"id": variant.merchant_offer_id, "sku": variant.sku, "status": variant.product_status})
-            continue
-        local_rows.extend(calculate_local_rows(variant))
+
+    skipped_missing_sku = [
+        {"variant_gid": variant.gid, "product_gid": variant.product_gid, "title": variant.title}
+        for variant in variants
+        if not variant.sku.strip()
+    ]
+    skipped_inactive = [
+        {"id": variant.merchant_offer_id, "sku": variant.sku, "status": variant.product_status}
+        for variant in variants
+        if variant.sku.strip() and variant.product_status != "ACTIVE"
+    ]
 
     supplemental_rows = calculate_supplemental_rows(variants)
-    supplemental_map = [("id", "id"), ("availability", "availability"), ("price", "price"), ("sale price", "sale_price"), ("sell on google quantity", "sell_on_google_quantity")]
-    local_map = [("id", "id"), ("store code", "store_code"), ("availability", "availability"), ("price", "price"), ("sale price", "sale_price"), ("quantity", "quantity"), ("pickup method", "pickup_method"), ("pickup SLA", "pickup_sla"), ("instore product location", "instore_product_location"), ("local shipping label", "local_shipping_label")]
+    supplemental_map = [
+        ("id", "id"),
+        ("availability", "availability"),
+        ("price", "price"),
+        ("sale price", "sale_price"),
+        ("sell on google quantity", "sell_on_google_quantity"),
+    ]
 
     write_tsv(OUT_DIR / "SUPPLEMENTAL_SOURCE_3.tsv", supplemental_rows, supplemental_map)
     write_csv(OUT_DIR / "supplemental_source_3_preview.csv", supplemental_rows)
-    write_tsv(OUT_DIR / "LOCAL_INVENTORY.tsv", local_rows, local_map)
-    write_csv(OUT_DIR / "local_inventory_shopify_preview.csv", local_rows)
     write_csv(OUT_DIR / "skipped_missing_sku.csv", skipped_missing_sku)
     write_csv(OUT_DIR / "skipped_inactive_product.csv", skipped_inactive)
 
-    test_rows = [row for row in local_rows if row.get("sku") == TEST_SKU or row.get("id") == TEST_MERCHANT_OFFER_ID]
-    central_test_rows = [row for row in supplemental_rows if row.get("id") == CENTRAL_TEST_ID]
-    write_csv(OUT_DIR / "control_sku_8996470703070.csv", test_rows)
-    write_csv(OUT_DIR / "control_variant_56264244887883_supplemental.csv", central_test_rows)
+    control_rows = [row for row in supplemental_rows if row.get("id") == CENTRAL_TEST_ID]
+    write_csv(OUT_DIR / "control_variant_56264244887883_supplemental.csv", control_rows)
 
     summary = {
+        "purpose": "SUPPLEMENTAL_SOURCE_3 product-level feed only. Local inventory is intentionally out of scope for this repository.",
         "shopify_variants_total": len(variants),
         "supplemental_rows": len(supplemental_rows),
-        "local_inventory_rows": len(local_rows),
-        "unique_offer_ids_in_upload": len({row["id"] for row in local_rows}),
+        "in_stock_rows": sum(1 for row in supplemental_rows if row["availability"] == "in_stock"),
+        "out_of_stock_rows": sum(1 for row in supplemental_rows if row["availability"] == "out_of_stock"),
         "skipped_missing_sku": len(skipped_missing_sku),
         "skipped_inactive_product": len(skipped_inactive),
-        "store_code_counts": {code: sum(1 for row in local_rows if row["store_code"] == code) for code in LOCATION_TO_STORE_CODE.values()},
-        "control_sku_rows": test_rows,
-        "control_variant_56264244887883_supplemental": central_test_rows,
-        "upload_requested": args.upload,
-        "upload_limit": args.upload_limit,
-        "upload_sku": args.upload_sku,
+        "control_variant_56264244887883_supplemental": control_rows,
         "shopify_page_size": SHOPIFY_PAGE_SIZE,
         "google_language": GOOGLE_LANGUAGE,
         "google_feed_label": GOOGLE_FEED_LABEL,
         "supplemental_template": [name for name, _ in supplemental_map],
-        "local_inventory_template": [name for name, _ in local_map],
     }
     (OUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
