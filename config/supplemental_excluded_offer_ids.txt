@@ -1,0 +1,6 @@
+# Offer IDs reported by Google Merchant Center as "Nabídka neexistuje".
+# These products currently do not exist in the primary Merchant source, so the supplemental feed must not update them.
+shopify_ZZ_15507128910155_56447328059723
+shopify_ZZ_15511045996875_56453326209355
+shopify_ZZ_15710673731915_57207938154827
+shopify_ZZ_15771616805195_57494228173131
