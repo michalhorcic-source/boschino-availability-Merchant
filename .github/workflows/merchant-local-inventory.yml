@@ -1,60 +1,23 @@
-name: Merchant feed generation
-run-name: Merchant feed ${{ github.event.inputs.batch_label || 'scheduled-0-1999' }}
+name: Supplemental Source 3 feed generation
+run-name: Supplemental Source 3 feed
 
 on:
   schedule:
-    - cron: "0 1 * * *"
+    # GitHub Actions uses UTC. 23:15 UTC is shortly after midnight in Czech time during summer time.
+    - cron: "15 23 * * *"
   workflow_dispatch:
-    inputs:
-      upload:
-        description: "Upload supplemental product data through Merchant API"
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
-      upload_limit:
-        description: "Supplemental API upload row limit for this batch"
-        required: true
-        default: "2000"
-      upload_offset:
-        description: "Supplemental API upload row offset for this batch"
-        required: true
-        default: "0"
-      auto_batch:
-        description: "Automatically dispatch the next 2000-row supplemental API batch"
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
-      batch_size:
-        description: "Rows per automatic supplemental API batch"
-        required: true
-        default: "2000"
-      batch_label:
-        description: "Visible run label, for example 6000-7999"
-        required: false
-        default: "manual"
-      upload_sku:
-        description: "Compatibility only. Ignored for full feed generation."
-        required: false
-        default: ""
 
 permissions:
   contents: read
   pages: write
   id-token: write
-  actions: write
 
 concurrency:
-  group: merchant-feed-pages
+  group: supplemental-source-3-pages
   cancel-in-progress: false
 
 jobs:
-  generate-merchant-feeds:
+  generate-supplemental-source-3:
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -70,135 +33,58 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate supplemental and local inventory feeds
+      - name: Generate Supplemental Source 3 feed
         env:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
           SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_API_VERSION: ${{ vars.SHOPIFY_API_VERSION || '2025-10' }}
-          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
           GOOGLE_LANGUAGE: cs
           GOOGLE_FEED_LABEL: CZK_105791684939
         run: python scripts/export_local_inventory.py
 
-      - name: Validate generated feed files
+      - name: Validate generated supplemental feed
         run: |
           test -s out/SUPPLEMENTAL_SOURCE_3.tsv
-          test -s out/LOCAL_INVENTORY.tsv
           test -s out/summary.json
           python - <<'PY'
           import csv
           from pathlib import Path
 
-          checks = [
-              (Path('out/SUPPLEMENTAL_SOURCE_3.tsv'), ['id', 'availability', 'price', 'sale price', 'sell on google quantity']),
-              (Path('out/LOCAL_INVENTORY.tsv'), ['id', 'store code', 'availability', 'price', 'sale price', 'quantity', 'pickup method', 'pickup SLA', 'instore product location', 'local shipping label']),
-          ]
-          for path, expected in checks:
-              with path.open('r', encoding='utf-8', newline='') as handle:
-                  reader = csv.reader(handle, delimiter='\t')
-                  header = next(reader)
-              if header != expected:
-                  raise SystemExit(f'{path}: unexpected header {header!r}, expected {expected!r}')
-          print('Feed headers validated.')
+          path = Path('out/SUPPLEMENTAL_SOURCE_3.tsv')
+          expected = ['id', 'availability', 'price', 'sale price', 'sell on google quantity']
+          with path.open('r', encoding='utf-8', newline='') as handle:
+              reader = csv.reader(handle, delimiter='\t')
+              header = next(reader)
+              first_row = next(reader, None)
+          if header != expected:
+              raise SystemExit(f'{path}: unexpected header {header!r}, expected {expected!r}')
+          if first_row is None:
+              raise SystemExit(f'{path}: no product rows generated')
+          print('Supplemental Source 3 feed validated.')
           PY
-
-      - name: Prepare supplemental batch variables
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.upload == 'true' }}
-        run: |
-          OFFSET="${{ github.event.inputs.upload_offset }}"
-          LIMIT="${{ github.event.inputs.upload_limit }}"
-          BATCH_SIZE="${{ github.event.inputs.batch_size }}"
-          if [ -z "$OFFSET" ]; then OFFSET="0"; fi
-          if [ -z "$LIMIT" ]; then LIMIT="2000"; fi
-          if [ -z "$BATCH_SIZE" ]; then BATCH_SIZE="2000"; fi
-          if [ "$LIMIT" = "0" ]; then LIMIT="$BATCH_SIZE"; fi
-          END=$((OFFSET + LIMIT - 1))
-          LABEL="${OFFSET}-${END}"
-          NEXT_OFFSET=$((OFFSET + LIMIT))
-          NEXT_END=$((NEXT_OFFSET + BATCH_SIZE - 1))
-          NEXT_LABEL="${NEXT_OFFSET}-${NEXT_END}"
-          TOTAL=$(python - <<'PY'
-          import json
-          with open('out/summary.json', encoding='utf-8') as handle:
-              print(json.load(handle).get('supplemental_rows', 0))
-          PY
-          )
-          echo "OFFSET=$OFFSET" >> "$GITHUB_ENV"
-          echo "LIMIT=$LIMIT" >> "$GITHUB_ENV"
-          echo "BATCH_SIZE=$BATCH_SIZE" >> "$GITHUB_ENV"
-          echo "BATCH_LABEL=$LABEL" >> "$GITHUB_ENV"
-          echo "NEXT_OFFSET=$NEXT_OFFSET" >> "$GITHUB_ENV"
-          echo "NEXT_LABEL=$NEXT_LABEL" >> "$GITHUB_ENV"
-          echo "SUPPLEMENTAL_TOTAL=$TOTAL" >> "$GITHUB_ENV"
-          echo "### Supplemental API batch ${LABEL}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Rows in supplemental export: ${TOTAL}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Current offset: ${OFFSET}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Current limit: ${LIMIT}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Authenticate to Google Cloud
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.upload == 'true' }}
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Upload supplemental feed through Merchant API
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.upload == 'true' }}
-        env:
-          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
-          GOOGLE_LANGUAGE: cs
-          GOOGLE_FEED_LABEL: CZK_105791684939
-          SUPPLEMENTAL_API_DATA_SOURCE: ${{ vars.SUPPLEMENTAL_API_DATA_SOURCE || '' }}
-          SUPPLEMENTAL_API_DISPLAY_NAME: SUPPLEMENTAL_SOURCE_3_API
-        run: |
-          echo "::group::Supplemental API batch ${BATCH_LABEL}"
-          python scripts/upload_supplemental_api.py --limit "$LIMIT" --offset "$OFFSET"
-          echo "::endgroup::"
-
-      - name: Dispatch next supplemental API batch
-        if: ${{ success() && (github.event_name == 'schedule' || github.event.inputs.auto_batch == 'true') }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "$NEXT_OFFSET" -ge "$SUPPLEMENTAL_TOTAL" ]; then
-            echo "All supplemental rows processed. Next offset ${NEXT_OFFSET} >= total ${SUPPLEMENTAL_TOTAL}." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "Dispatching next supplemental batch ${NEXT_LABEL}" | tee -a "$GITHUB_STEP_SUMMARY"
-          gh workflow run merchant-local-inventory.yml \
-            -R "${{ github.repository }}" \
-            -f upload=true \
-            -f upload_limit="$BATCH_SIZE" \
-            -f upload_offset="$NEXT_OFFSET" \
-            -f auto_batch=true \
-            -f batch_size="$BATCH_SIZE" \
-            -f batch_label="$NEXT_LABEL"
 
       - name: Prepare public feed site
         run: |
           mkdir -p public
           cp out/SUPPLEMENTAL_SOURCE_3.tsv public/SUPPLEMENTAL_SOURCE_3.tsv
-          cp out/LOCAL_INVENTORY.tsv public/LOCAL_INVENTORY.tsv
           cp out/summary.json public/summary.json
-          cp out/control_sku_8996470703070.csv public/control_sku_8996470703070.csv
+          cp out/supplemental_source_3_preview.csv public/supplemental_source_3_preview.csv
           if [ -f out/control_variant_56264244887883_supplemental.csv ]; then cp out/control_variant_56264244887883_supplemental.csv public/control_variant_56264244887883_supplemental.csv; fi
-          if [ -f out/supplemental_api_summary.json ]; then cp out/supplemental_api_summary.json public/supplemental_api_summary.json; fi
           cat > public/index.html <<'HTML'
           <!doctype html>
           <html lang="en">
           <head>
             <meta charset="utf-8">
-            <title>Boschino Merchant feeds</title>
+            <title>Boschino Supplemental Source 3 feed</title>
           </head>
           <body>
-            <h1>Boschino Merchant feeds</h1>
+            <h1>Boschino Supplemental Source 3 feed</h1>
+            <p>This repository publishes only the product-level supplemental feed for Boschino.cz.</p>
             <ul>
               <li><a href="SUPPLEMENTAL_SOURCE_3.tsv">SUPPLEMENTAL_SOURCE_3.tsv</a></li>
-              <li><a href="LOCAL_INVENTORY.tsv">LOCAL_INVENTORY.tsv</a></li>
               <li><a href="summary.json">summary.json</a></li>
-              <li><a href="control_sku_8996470703070.csv">control_sku_8996470703070.csv</a></li>
+              <li><a href="supplemental_source_3_preview.csv">supplemental_source_3_preview.csv</a></li>
               <li><a href="control_variant_56264244887883_supplemental.csv">control_variant_56264244887883_supplemental.csv</a></li>
-              <li><a href="supplemental_api_summary.json">supplemental_api_summary.json</a></li>
             </ul>
           </body>
           </html>
@@ -208,20 +94,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: merchant-feed-files-${{ env.BATCH_LABEL || 'no-upload' }}
+          name: supplemental-source-3-feed
           path: |
             out/SUPPLEMENTAL_SOURCE_3.tsv
-            out/LOCAL_INVENTORY.tsv
             out/supplemental_source_3_preview.csv
-            out/local_inventory_shopify_preview.csv
-            out/control_sku_8996470703070.csv
             out/control_variant_56264244887883_supplemental.csv
             out/skipped_missing_sku.csv
             out/skipped_inactive_product.csv
             out/summary.json
-            out/supplemental_api_summary.json
-            out/supplemental_api_payload_audit.csv
-            out/supplemental_api_errors.csv
           if-no-files-found: warn
           retention-days: 14
 
