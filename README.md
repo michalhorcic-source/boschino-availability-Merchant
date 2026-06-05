@@ -1,6 +1,12 @@
-# Boschino Merchant local inventory automation
+# Boschino Supplemental Source 3 feed
 
-This repository validates and uploads Boschino.cz local inventory / local availability data from Shopify to Google Merchant Center.
+This repository publishes one product-level Google Merchant Center supplemental feed for Boschino.cz:
+
+```text
+SUPPLEMENTAL_SOURCE_3.tsv
+```
+
+Local inventory is intentionally out of scope for this repository and will be handled in a separate repository.
 
 ## What it does
 
@@ -11,132 +17,114 @@ This repository validates and uploads Boschino.cz local inventory / local availa
 shopify_ZZ_{numeric_product_id}_{numeric_variant_id}
 ```
 
-- Fetches existing Merchant Center products and uploads only matching offers.
-- Generates three local inventory rows per valid offer, one for each verified Google store code.
-- Produces audit artifacts for validation before enabling a real upload.
+- Generates `SUPPLEMENTAL_SOURCE_3.tsv` for Google Merchant Center.
+- Publishes the feed to GitHub Pages for Merchant scheduled fetch.
+- Does not upload products through the Merchant API.
+- Does not generate or publish a local inventory feed.
 
-## Verified store codes
+## Public URLs
 
 ```text
-06275645225922442974  Praha 8 / Horovo namesti
-06824451997053158379  Praha 10 / Francouzska
-14326918149907693002  Benatky nad Jizerou
+https://michalhorcic-source.github.io/boschino-availability-Merchant/SUPPLEMENTAL_SOURCE_3.tsv
+https://michalhorcic-source.github.io/boschino-availability-Merchant/summary.json
 ```
 
-## Verified Shopify location mapping
+## Feed columns
 
 ```text
-gid://shopify/Location/115128074571 -> 06275645225922442974
-gid://shopify/Location/115128107339 -> 06824451997053158379
-gid://shopify/Location/115128140107 -> 14326918149907693002
+id
+availability
+price
+sale price
+sell on google quantity
 ```
 
 ## Availability rules
 
-1. Local quantity is greater than zero:
-   - `quantity = local_quantity`
-   - `availability = limited_availability` for 1-2 pieces
-   - `availability = in_stock` for 3+ pieces
-   - `pickup_sla = same day`
+A variant is exported only when it has a SKU and the Shopify product status is `ACTIVE`.
 
-2. Local quantity is zero, but another mapped Boschino location has stock:
-   - `quantity = 0`
-   - `availability = in_stock`
-   - `pickup_sla = next day`
+The feed sets:
 
-3. All mapped locations are zero, but the global Merchant offer is in stock:
-   - `quantity = 0`
-   - `availability = in_stock`
-   - `pickup_sla = 6-day`
+```text
+availability = in_stock
+```
 
-4. All mapped locations are zero and the global Merchant offer is out of stock:
-   - `quantity = 0`
-   - `availability = out_of_stock`
-   - `pickup_sla` is left blank
+when at least one of these is true:
+
+- Shopify `availableForSale` is `true`.
+- Shopify `inventoryQuantity` or product `totalInventory` is greater than zero.
+- Shopify availability metafields indicate that the item is available or in stock.
+
+Otherwise the feed sets:
+
+```text
+availability = out_of_stock
+```
+
+## Price rules
+
+- `price` is the normal Merchant price in `CZK`.
+- `sale price` is filled only when Shopify `compareAtPrice` is higher than current `price`.
+- `sell on google quantity` is the maximum of Shopify variant `inventoryQuantity` and product `totalInventory`.
 
 ## Required GitHub Actions secrets
 
-Add these in GitHub repo settings:
-
 ```text
-SHOPIFY_ADMIN_TOKEN
-SHOPIFY_SHOP_DOMAIN
-GOOGLE_MERCHANT_ID
-GOOGLE_SERVICE_ACCOUNT_JSON
+SHOPIFY_ADMIN_ACCESS_TOKEN
+SHOPIFY_SHOP
 ```
 
 Recommended value:
 
 ```text
-SHOPIFY_SHOP_DOMAIN=vvircm-fz.myshopify.com
+SHOPIFY_SHOP=vvircm-fz.myshopify.com
 ```
-
-`GOOGLE_SERVICE_ACCOUNT_JSON` must be the full service account JSON with access to the relevant Merchant Center account.
 
 ## Optional GitHub Actions variables
 
 ```text
 SHOPIFY_API_VERSION=2025-10
-GOOGLE_LANGUAGE=cs
-GOOGLE_FEED_LABEL=CZ
 ```
 
 ## Running
 
-The workflow runs nightly at 01:00 UTC and can be started manually from GitHub Actions.
+The workflow runs once per day from GitHub Actions and can also be started manually.
 
-Manual run defaults to dry-run validation. It does not upload data unless `upload=true` is selected.
-
-Recommended first run:
+Current schedule:
 
 ```text
-upload=false
+15 23 * * * UTC
 ```
 
-Recommended first upload test:
+This is shortly after midnight in Czech time during summer time. GitHub Actions schedules use UTC.
+
+## Output artifacts
+
+Every run uploads an artifact named:
 
 ```text
-upload=true
-upload_limit=3
+supplemental-source-3-feed
 ```
 
-Full upload:
+It contains:
 
 ```text
-upload=true
-upload_limit=0
-```
-
-## Audit artifacts
-
-Every run uploads an artifact named `merchant-local-inventory-audit` containing:
-
-```text
-local_inventory_shopify.tsv
-local_inventory_shopify_preview.csv
-summary.json
-control_sku_8996470703070.csv
+SUPPLEMENTAL_SOURCE_3.tsv
+supplemental_source_3_preview.csv
+control_variant_56264244887883_supplemental.csv
 skipped_missing_sku.csv
 skipped_inactive_product.csv
-skipped_not_in_merchant.csv
+summary.json
 ```
 
-The control SKU is:
+## Control product
 
 ```text
-8996470703070
+shopify_ZZ_15464863891787_56264244887883
 ```
 
-Expected Merchant offer ID:
+This control row is exported to:
 
 ```text
-shopify_ZZ_15493147984203_56386003730763
-```
-
-Expected local quantities:
-
-```text
-06275645225922442974  0
-06824451997053158379  4
-14326918149907693002  105
+control_variant_56264244887883_supplemental.csv
 ```
