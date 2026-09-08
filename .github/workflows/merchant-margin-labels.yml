@@ -1,17 +1,8 @@
 name: Boschino Merchant margin labels
-run-name: Merchant margin labels - ${{ inputs.mode }}
+run-name: Merchant margin labels dry-run
 
 on:
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "dry-run only, or apply custom_label_3"
-        required: true
-        default: "dry-run"
-        type: choice
-        options:
-          - dry-run
-          - apply
 
 permissions:
   contents: read
@@ -40,21 +31,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run margin labels
+      - name: Run margin labels dry-run
         env:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
           SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_API_VERSION: "2026-04"
           VAT_CZ: "0.21"
           VAT_SK: "0.23"
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ inputs.mode }}" = "apply" ]; then
-            python scripts/merchant_margin_labels.py --apply
-          else
-            python scripts/merchant_margin_labels.py
-          fi
+        run: python scripts/merchant_margin_labels.py
 
       - name: Upload audit artifact
         if: always()
