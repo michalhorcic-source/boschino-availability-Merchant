@@ -1,6 +1,6 @@
 name: Run Margin labels once 2026-09-09
 
-# Retry after uploader parallelization/resume fix.
+# Retry after Google auth caching/retry fix.
 on:
   push:
     branches:
