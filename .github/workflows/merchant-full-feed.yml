@@ -12,6 +12,7 @@ on:
     paths:
       - ".github/workflows/merchant-full-feed.yml"
       - "scripts/export_merchant_products.py"
+      - "scripts/export_merchant_products_purchasable.py"
 
 permissions:
   contents: write
@@ -46,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Export final processed Merchant products
+      - name: Export purchasable Merchant products
         env:
           GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
           GOOGLE_LANGUAGE: cs
@@ -54,7 +55,7 @@ jobs:
           MIN_EXPECTED_PRODUCTS: "10000"
           MAX_DROP_RATIO: "0.30"
           PREVIOUS_FEED_PATH: merchant/BOSCHINO_CZ_PRODUCTS.tsv
-        run: python scripts/export_merchant_products.py
+        run: python scripts/export_merchant_products_purchasable.py
 
       - name: Validate Merchant TSV
         shell: bash
@@ -74,18 +75,23 @@ jobs:
 
           expected = ['id', 'title', 'description', 'link', 'mobile_link', 'canonical_link', 'image_link']
           with feed.open('r', encoding='utf-8', newline='') as handle:
-              reader = csv.reader(handle, delimiter='\t')
-              header = next(reader)
-              rows = sum(1 for _ in reader)
-          if header[:len(expected)] != expected:
-              raise SystemExit(f'Unexpected Merchant header: {header[:len(expected)]!r}')
+              reader = csv.DictReader(handle, delimiter='\t')
+              if reader.fieldnames[:len(expected)] != expected:
+                  raise SystemExit(f'Unexpected Merchant header: {reader.fieldnames[:len(expected)]!r}')
+              rows = list(reader)
 
           meta = json.loads(summary.read_text(encoding='utf-8'))
-          if rows != meta['exported_products']:
-              raise SystemExit(f'Row-count mismatch: tsv={rows} summary={meta["exported_products"]}')
-          if rows < 10000:
-              raise SystemExit(f'Refusing suspiciously small feed: {rows}')
-          print(f'Validated {rows} Merchant products, {feed.stat().st_size} bytes')
+          if len(rows) != meta['exported_products']:
+              raise SystemExit(f'Row-count mismatch: tsv={len(rows)} summary={meta["exported_products"]}')
+          if len(rows) < 10000:
+              raise SystemExit(f'Refusing suspiciously small feed: {len(rows)}')
+
+          allowed = {'in_stock', 'preorder', 'backorder'}
+          invalid = [row.get('availability', '') for row in rows if row.get('availability', '') not in allowed]
+          if invalid:
+              raise SystemExit(f'Non-purchasable availability leaked into feed: {invalid[:10]}')
+
+          print(f'Validated {len(rows)} purchasable Merchant products, {feed.stat().st_size} bytes')
           PY
 
       - name: Publish stable GitHub feed files
