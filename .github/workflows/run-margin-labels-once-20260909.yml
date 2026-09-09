@@ -1,5 +1,6 @@
 name: Run Margin labels once 2026-09-09
 
+# Retry after uploader parallelization/resume fix.
 on:
   push:
     branches:
@@ -51,6 +52,7 @@ jobs:
           SHOPIFY_API_VERSION: "2026-04"
           VAT_CZ: "0.21"
           VAT_SK: "0.23"
+          MARGIN_UPLOAD_WORKERS: "8"
         run: python scripts/merchant_margin_labels_apply_v3.py
 
       - name: Upload artifacts
