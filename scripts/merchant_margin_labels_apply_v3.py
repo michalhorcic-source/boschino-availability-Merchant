@@ -15,6 +15,7 @@ from urllib.parse import quote
 import google.auth
 import google.auth.transport.requests
 import requests
+import merchant_margin_labels_audit_v2 as audit_v2
 
 from merchant_margin_labels_audit_v2 import (
     ACCOUNTS,
@@ -45,9 +46,26 @@ def google_headers() -> Dict[str, str]:
         if _google_creds is None:
             _google_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/content"])
         if not _google_creds.valid or _google_creds.expired or not _google_creds.token:
-            _google_creds.refresh(google.auth.transport.requests.Request())
+            last_error = None
+            for attempt in range(1, 6):
+                try:
+                    _google_creds.refresh(google.auth.transport.requests.Request())
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < 5:
+                        time.sleep(min(30, 2 ** attempt))
+            if last_error is not None:
+                raise RuntimeError(f"Google credential refresh failed after retries: {last_error}") from last_error
         token = _google_creds.token
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+# paged_get imported from audit_v2 resolves globals in that module. Reuse the
+# same cached/retrying credential provider there so the pre-write scan does not
+# request a new GitHub OIDC subject token for every Merchant page.
+audit_v2.google_headers = google_headers
 
 
 def request_json(method: str, url: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
