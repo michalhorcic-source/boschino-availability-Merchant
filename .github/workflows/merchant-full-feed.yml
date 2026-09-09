@@ -1,0 +1,117 @@
+name: Boschino CZ Merchant full feed
+run-name: Boschino CZ Merchant full feed
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+      timezone: "Europe/Prague"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/merchant-full-feed.yml"
+      - "scripts/export_merchant_products.py"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: boschino-cz-merchant-full-feed
+  cancel-in-progress: false
+
+jobs:
+  export-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Export final processed Merchant products
+        env:
+          GOOGLE_MERCHANT_ID: ${{ secrets.MERCHANT_ACCOUNT_ID }}
+          GOOGLE_LANGUAGE: cs
+          GOOGLE_FEED_LABEL: CZK_105791684939
+          MIN_EXPECTED_PRODUCTS: "10000"
+          MAX_DROP_RATIO: "0.30"
+          PREVIOUS_FEED_PATH: merchant/BOSCHINO_CZ_PRODUCTS.tsv
+        run: python scripts/export_merchant_products.py
+
+      - name: Validate Merchant TSV
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          feed = Path('out/merchant-full-feed/BOSCHINO_CZ_PRODUCTS.tsv')
+          summary = Path('out/merchant-full-feed/BOSCHINO_CZ_PRODUCTS.summary.json')
+          if not feed.is_file() or feed.stat().st_size == 0:
+              raise SystemExit('Merchant feed missing or empty')
+          if not summary.is_file() or summary.stat().st_size == 0:
+              raise SystemExit('Merchant feed summary missing or empty')
+
+          expected = ['id', 'title', 'description', 'link', 'mobile_link', 'canonical_link', 'image_link']
+          with feed.open('r', encoding='utf-8', newline='') as handle:
+              reader = csv.reader(handle, delimiter='\t')
+              header = next(reader)
+              rows = sum(1 for _ in reader)
+          if header[:len(expected)] != expected:
+              raise SystemExit(f'Unexpected Merchant header: {header[:len(expected)]!r}')
+
+          meta = json.loads(summary.read_text(encoding='utf-8'))
+          if rows != meta['exported_products']:
+              raise SystemExit(f'Row-count mismatch: tsv={rows} summary={meta["exported_products"]}')
+          if rows < 10000:
+              raise SystemExit(f'Refusing suspiciously small feed: {rows}')
+          print(f'Validated {rows} Merchant products, {feed.stat().st_size} bytes')
+          PY
+
+      - name: Publish stable GitHub feed files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p merchant
+          cp out/merchant-full-feed/BOSCHINO_CZ_PRODUCTS.tsv merchant/BOSCHINO_CZ_PRODUCTS.tsv
+          cp out/merchant-full-feed/BOSCHINO_CZ_PRODUCTS.summary.json merchant/BOSCHINO_CZ_PRODUCTS.summary.json
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add merchant/BOSCHINO_CZ_PRODUCTS.tsv merchant/BOSCHINO_CZ_PRODUCTS.summary.json
+
+          if git diff --cached --quiet; then
+            echo 'Merchant feed is unchanged; nothing to commit.'
+            exit 0
+          fi
+
+          git commit -m 'Update Boschino CZ Merchant full feed [skip ci]'
+          git push origin HEAD:main
+
+      - name: Upload run artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boschino-cz-merchant-full-feed-${{ github.run_id }}
+          path: out/merchant-full-feed/
+          if-no-files-found: warn
+          retention-days: 14
