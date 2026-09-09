@@ -1,6 +1,8 @@
 name: Boschino Merchant margin labels apply
 
 on:
+  schedule:
+    - cron: "30 2 * * *"
   workflow_dispatch:
     inputs:
       confirmation:
@@ -12,9 +14,13 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: boschino-merchant-margin-labels-apply
+  cancel-in-progress: false
+
 jobs:
   apply-margin-labels:
-    if: ${{ inputs.confirmation == 'APPLY_MARGIN_LABEL_3' }}
+    if: ${{ github.event_name == 'schedule' || inputs.confirmation == 'APPLY_MARGIN_LABEL_3' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
