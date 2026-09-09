@@ -2,7 +2,10 @@ name: Boschino Merchant margin labels apply
 
 on:
   schedule:
-    - cron: "30 2 * * *"
+    # GitHub Actions schedules are UTC. Use both possible UTC hours for
+    # 00:05 Europe/Prague and gate inside the workflow for CET/CEST.
+    - cron: "5 22 * * *"
+    - cron: "5 23 * * *"
   workflow_dispatch:
     inputs:
       confirmation:
@@ -19,8 +22,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  schedule-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.prague.outputs.run }}
+    steps:
+      - name: Europe/Prague midnight guard
+        id: prague
+        shell: python
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          import os
+          from datetime import datetime, timezone
+          from zoneinfo import ZoneInfo
+
+          if os.environ.get("EVENT_NAME") != "schedule":
+              should_run = True
+          else:
+              local = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Prague"))
+              should_run = local.hour == 0
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"run={'true' if should_run else 'false'}\n")
+
   apply-margin-labels:
-    if: ${{ github.event_name == 'schedule' || inputs.confirmation == 'APPLY_MARGIN_LABEL_3' }}
+    needs: schedule-gate
+    if: ${{ needs.schedule-gate.outputs.run == 'true' && (github.event_name == 'schedule' || inputs.confirmation == 'APPLY_MARGIN_LABEL_3') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
