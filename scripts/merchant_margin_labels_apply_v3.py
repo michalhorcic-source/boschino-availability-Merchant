@@ -4,8 +4,10 @@ from __future__ import annotations
 import csv
 import json
 import os
+import threading
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -31,12 +33,21 @@ from merchant_margin_labels_audit_v2 import (
 OUT = Path("out/margin-labels-apply")
 DATASOURCES = "https://merchantapi.googleapis.com/datasources/v1"
 SOURCE_DISPLAY_NAME = os.getenv("MARGIN_SOURCE_DISPLAY_NAME", "BOSCHINO_MARGIN_LABELS_API")
+UPLOAD_WORKERS = max(1, min(int(os.getenv("MARGIN_UPLOAD_WORKERS", "8")), 32))
+
+_google_creds = None
+_google_creds_lock = threading.Lock()
 
 
 def google_headers() -> Dict[str, str]:
-    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/content"])
-    creds.refresh(google.auth.transport.requests.Request())
-    return {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
+    global _google_creds
+    with _google_creds_lock:
+        if _google_creds is None:
+            _google_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/content"])
+        if not _google_creds.valid or _google_creds.expired or not _google_creds.token:
+            _google_creds.refresh(google.auth.transport.requests.Request())
+        token = _google_creds.token
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
 def request_json(method: str, url: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -110,6 +121,25 @@ def ensure_source(account_id: str) -> Dict[str, Any]:
         f"{DATASOURCES}/accounts/{quote(account_id, safe='')}/dataSources",
         {"displayName": SOURCE_DISPLAY_NAME, "supplementalProductDataSource": {}},
     )
+
+
+def upload_row(row: Dict[str, Any], sources: Dict[str, str]) -> Dict[str, Any]:
+    account_id = str(row["merchant_account_id"])
+    url = (
+        f"{PRODUCTS}/accounts/{quote(account_id, safe='')}/productInputs:insert"
+        f"?dataSource={quote(sources[row['market']], safe='')}"
+    )
+    body = {
+        "offerId": row["offer_id"],
+        "contentLanguage": row["content_language"],
+        "feedLabel": row["feed_label"],
+        "productAttributes": {"customLabel3": row["new_custom_label_3"]},
+    }
+    try:
+        request_json("POST", url, body)
+        return {**row, "status": "ACCEPTED", "error": ""}
+    except Exception as exc:
+        return {**row, "status": "ERROR", "error": str(exc)[:2000]}
 
 
 def main() -> int:
@@ -198,32 +228,30 @@ def main() -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 5
 
+    already_correct = [row for row in planned if row["old_custom_label_3"] == row["new_custom_label_3"]]
+    to_upload = [row for row in planned if row["old_custom_label_3"] != row["new_custom_label_3"]]
+    write_csv(OUT / "already_correct.csv", already_correct)
+    write_csv(OUT / "to_upload.csv", to_upload)
+
     sources = {
         market: ensure_source(str(selected[market]["accountId"]))["name"]
         for market in ("CZ", "SK")
     }
 
+    print(
+        f"Margin upload plan: total={len(planned)} already_correct={len(already_correct)} "
+        f"to_upload={len(to_upload)} workers={UPLOAD_WORKERS}",
+        flush=True,
+    )
+
     results: List[Dict[str, Any]] = []
-    for index, row in enumerate(planned, 1):
-        account_id = str(row["merchant_account_id"])
-        url = (
-            f"{PRODUCTS}/accounts/{quote(account_id, safe='')}/productInputs:insert"
-            f"?dataSource={quote(sources[row['market']], safe='')}"
-        )
-        body = {
-            "offerId": row["offer_id"],
-            "contentLanguage": row["content_language"],
-            "feedLabel": row["feed_label"],
-            "productAttributes": {"customLabel3": row["new_custom_label_3"]},
-        }
-        try:
-            request_json("POST", url, body)
-            results.append({**row, "status": "ACCEPTED", "error": ""})
-        except Exception as exc:
-            results.append({**row, "status": "ERROR", "error": str(exc)[:2000]})
-        if index % 250 == 0 or index == len(planned):
-            errors = sum(r["status"] == "ERROR" for r in results)
-            print(f"Upload {index}/{len(planned)} errors={errors}", flush=True)
+    if to_upload:
+        with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS, thread_name_prefix="margin-upload") as executor:
+            for index, result in enumerate(executor.map(lambda row: upload_row(row, sources), to_upload), 1):
+                results.append(result)
+                if index % 250 == 0 or index == len(to_upload):
+                    errors = sum(r["status"] == "ERROR" for r in results)
+                    print(f"Upload {index}/{len(to_upload)} errors={errors}", flush=True)
 
     write_csv(OUT / "upload_results.csv", results)
     errors = sum(r["status"] == "ERROR" for r in results)
@@ -233,10 +261,13 @@ def main() -> int:
         "source_display_name": SOURCE_DISPLAY_NAME,
         "sources": sources,
         "planned": len(planned),
+        "already_correct": len(already_correct),
+        "attempted": len(results),
         "accepted": len(results) - errors,
         "errors": errors,
         "skipped": len(skipped),
         "old_label3_nonempty": sum(bool(r["old_custom_label_3"]) for r in planned),
+        "workers": UPLOAD_WORKERS,
         "distribution": distribution,
         "custom_label_4": "NOT_WRITTEN",
     }
