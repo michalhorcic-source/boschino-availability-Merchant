@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import re
+import threading
 import time
 from collections import Counter
 from decimal import Decimal, InvalidOperation
@@ -25,6 +26,9 @@ SHOP_URL = f"https://{SHOP}/admin/api/{API}/graphql.json"
 SHOP_TOKEN = os.getenv("SHOPIFY_ADMIN_TOKEN", "").strip()
 VAT = {"CZ": Decimal(os.getenv("VAT_CZ", "0.21")), "SK": Decimal(os.getenv("VAT_SK", "0.23"))}
 
+_google_creds = None
+_google_creds_lock = threading.Lock()
+
 
 def D(value: Any) -> Optional[Decimal]:
     if value is None or str(value).strip() == "":
@@ -36,9 +40,25 @@ def D(value: Any) -> Optional[Decimal]:
 
 
 def google_headers() -> Dict[str, str]:
-    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/content"])
-    creds.refresh(google.auth.transport.requests.Request())
-    return {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
+    global _google_creds
+    with _google_creds_lock:
+        if _google_creds is None:
+            _google_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/content"])
+        if not _google_creds.valid or _google_creds.expired or not _google_creds.token:
+            last_error = None
+            for attempt in range(1, 6):
+                try:
+                    _google_creds.refresh(google.auth.transport.requests.Request())
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < 5:
+                        time.sleep(min(30, 2 ** attempt))
+            if last_error is not None:
+                raise RuntimeError(f"Google credential refresh failed after retries: {last_error}") from last_error
+        token = _google_creds.token
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
 def request_json(method: str, url: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
