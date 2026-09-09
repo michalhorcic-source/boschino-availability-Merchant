@@ -50,6 +50,7 @@ def main() -> int:
     purchasable = [row for row in rows if row["availability"] in PURCHASABLE_AVAILABILITY]
 
     invalid_required = Counter()
+    invalid_rows = 0
     valid_rows: List[dict[str, str]] = []
     seen = set()
     duplicates = []
@@ -58,6 +59,7 @@ def main() -> int:
     for row in purchasable:
         missing = [field for field in required if not row[field]]
         if missing:
+            invalid_rows += 1
             invalid_required.update(missing)
             continue
         if row["id"] in seen:
@@ -100,14 +102,13 @@ def main() -> int:
     summary = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "source": "Google Merchant API processed products",
-        "account_id": account_id,
         "content_language": language,
         "feed_label": feed_label,
         "processed_products": len(all_products),
         "matching_market_products": len(selected),
         "availability_counts": dict(availability_counts),
         "purchasable_before_validation": len(purchasable),
-        "skipped_invalid_required": sum(invalid_required.values()),
+        "skipped_invalid_rows": invalid_rows,
         "missing_required_fields": dict(invalid_required),
         "exported_products": len(valid_rows),
         "purchasable_availability": sorted(PURCHASABLE_AVAILABILITY),
