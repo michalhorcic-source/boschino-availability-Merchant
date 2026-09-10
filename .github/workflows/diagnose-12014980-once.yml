@@ -1,0 +1,67 @@
+name: Diagnose Merchant 12014980 once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/diagnose-12014980-once.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Diagnose current resolved Merchant product
+        env:
+          GOOGLE_MERCHANT_ID: "5757276720"
+          GOOGLE_LANGUAGE: "cs"
+          GOOGLE_FEED_LABEL: "CZK_105791684939"
+        run: >-
+          python scripts/diagnose_merchant_product.py
+          --account-id 5757276720
+          --language cs
+          --feed-label CZK_105791684939
+          --extra-feed-label CZ
+          --offer-id shopify_ZZ_15493147984203_56386003730763
+          --variant-gid gid://shopify/ProductVariant/56386003730763
+          --gtin 4054905492008
+          --sku 8996470703070
+      - name: Print resolved product match
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('out/merchant_product_diagnostics.json')
+          if not p.exists():
+              print('diagnostics missing')
+              raise SystemExit(0)
+          d=json.loads(p.read_text(encoding='utf-8'))
+          for row in d.get('products_get_matches', []):
+              print(json.dumps(row, ensure_ascii=False, indent=2))
+          PY
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchant-12014980-diagnostics-${{ github.run_id }}
+          path: out/merchant_product_diagnostics.json
+          if-no-files-found: warn
+          retention-days: 30
