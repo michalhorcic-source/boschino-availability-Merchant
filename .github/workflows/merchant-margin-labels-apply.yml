@@ -70,6 +70,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Ensure CZ Margin source is linked to Shopify App API
+        env:
+          MARGIN_CZ_ACCOUNT_ID: "5757276720"
+          MARGIN_SOURCE_DISPLAY_NAME: "BOSCHINO_MARGIN_LABELS_API"
+          MARGIN_PRIMARY_SOURCE_DISPLAY_NAME_CZ: "Shopify App API"
+        run: python scripts/merchant_margin_source_link.py
+
       - name: Run read-only audit v2
         env:
           SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
@@ -96,6 +103,15 @@ jobs:
           VAT_CZ: "0.21"
           VAT_SK: "0.23"
         run: python scripts/merchant_margin_labels_apply_v3.py
+
+      - name: Upload source-link artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchant-margin-source-link-${{ github.run_id }}
+          path: out/margin-source-link/
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload apply artifact
         if: always()
