@@ -1,0 +1,50 @@
+name: Forensic Merchant sources 12014980 once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/forensic-12014980-sources-once.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  forensic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run read-only source forensics
+        env:
+          CZ_MERCHANT_ACCOUNT_ID: "5757276720"
+          TEST_OFFER_ID: "shopify_ZZ_15493147984203_56386003730763"
+          TEST_CONTENT_LANGUAGE: "cs"
+          TEST_FEED_LABEL: "CZK_105791684939"
+        run: python scripts/forensic_12014980_sources.py
+
+      - name: Upload forensic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forensic-12014980-${{ github.run_id }}
+          path: out/forensic-12014980/forensic.json
+          if-no-files-found: warn
+          retention-days: 30
