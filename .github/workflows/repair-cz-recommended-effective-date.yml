@@ -1,0 +1,120 @@
+name: Repair CZ Recommended effective date
+run-name: Repair CZ Recommended effective date
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/repair-cz-recommended-effective-date.yml"
+      - "scripts/repair_cz_recommended_effective_dates.py"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: repair-cz-recommended-effective-date
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Prepare corrected CZ Recommended feed
+        env:
+          CZ_RECOMMENDED_ACCOUNT_ID: "5757276720"
+          CZ_RECOMMENDED_SOURCE_DISPLAY_NAME: "Boschino CZ Recommended Price"
+          CZ_RECOMMENDED_MIN_EXPECTED_ROWS: "10000"
+        run: python scripts/repair_cz_recommended_effective_dates.py prepare
+
+      - name: Validate control product 12014980
+        shell: python
+        run: |
+          import csv
+          from pathlib import Path
+
+          path = Path('merchant/BOSCHINO_CZ_RECOMMENDED_PRICE.tsv')
+          target = 'shopify_ZZ_15493147984203_56386003730763'
+          with path.open('r', encoding='utf-8', newline='') as handle:
+              reader = csv.DictReader(handle, delimiter='\t')
+              rows = [r for r in reader if r.get('id') == target]
+          if len(rows) != 1:
+              raise SystemExit(f'Control product count={len(rows)}')
+          row = rows[0]
+          if row.get('price') != '2488.00 CZK':
+              raise SystemExit(f'Unexpected control price: {row.get("price")!r}')
+          if row.get('sale_price') != '1806.00 CZK':
+              raise SystemExit(f'Unexpected control sale price: {row.get("sale_price")!r}')
+          value = row.get('sale_price_effective_date') or ''
+          if ':00+0200/' not in value and ':00+0100/' not in value:
+              raise SystemExit(f'Unexpected effective-date format: {value!r}')
+          if value.count(':') != 2:
+              raise SystemExit(f'Expected minute precision only: {value!r}')
+          print(row)
+
+      - name: Publish corrected CZ Recommended feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add merchant/BOSCHINO_CZ_RECOMMENDED_PRICE.tsv merchant/BOSCHINO_CZ_RECOMMENDED_PRICE.summary.json
+          if git diff --cached --quiet; then
+            echo 'Corrected Recommended feed unchanged; nothing to commit.'
+          else
+            git commit -m 'Publish corrected CZ Recommended effective dates [skip ci]'
+            git push origin HEAD:main
+          fi
+
+      - name: Wait for raw GitHub content
+        shell: python
+        run: |
+          import time
+          import requests
+          url='https://raw.githubusercontent.com/michalhorcic-source/boschino-availability-Merchant/main/merchant/BOSCHINO_CZ_RECOMMENDED_PRICE.tsv'
+          for attempt in range(1,31):
+              r=requests.get(url,timeout=30)
+              if r.status_code==200 and b'sale_price_effective_date' in r.content:
+                  print('raw feed available', len(r.content))
+                  break
+              time.sleep(10)
+          else:
+              raise SystemExit('Raw corrected feed did not become available')
+
+      - name: Point Merchant source to corrected feed and fetch
+        env:
+          CZ_RECOMMENDED_ACCOUNT_ID: "5757276720"
+          CZ_RECOMMENDED_SOURCE_DISPLAY_NAME: "Boschino CZ Recommended Price"
+        run: python scripts/repair_cz_recommended_effective_dates.py apply --wait-seconds 1200
+
+      - name: Upload repair artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cz-recommended-effective-date-repair-${{ github.run_id }}
+          path: |
+            out/cz-recommended-date-repair/
+            merchant/BOSCHINO_CZ_RECOMMENDED_PRICE.summary.json
+          if-no-files-found: warn
+          retention-days: 30
