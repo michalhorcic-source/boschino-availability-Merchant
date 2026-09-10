@@ -1,0 +1,44 @@
+name: Test sale effective date 12014980 once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/test-sale-effective-date-12014980-once.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Apply structured sale effective date to one product and verify
+        env:
+          CZ_MERCHANT_ACCOUNT_ID: "5757276720"
+          CZ_RECOMMENDED_DATA_SOURCE: "accounts/5757276720/dataSources/10697609710"
+          TEST_OFFER_ID: "shopify_ZZ_15493147984203_56386003730763"
+        run: python scripts/test_sale_effective_date_override.py
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sale-effective-date-test-${{ github.run_id }}
+          path: out/sale-effective-date-test/result.json
+          if-no-files-found: warn
+          retention-days: 30
