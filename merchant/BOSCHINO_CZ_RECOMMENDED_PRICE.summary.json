@@ -1,0 +1,23 @@
+{
+  "status": "PREPARED",
+  "upstream_url": "https://boschino-feed-worker.michal-horcic.workers.dev/feeds/cz-recommended-prices.tsv",
+  "target_url": "https://raw.githubusercontent.com/michalhorcic-source/boschino-availability-Merchant/main/merchant/BOSCHINO_CZ_RECOMMENDED_PRICE.tsv",
+  "rows": 28137,
+  "sale_rows": 11125,
+  "non_sale_rows": 17012,
+  "normalized_sale_rows": 11125,
+  "converted_non_sale_rows": 0,
+  "effective_range": "2026-09-10T00:00+0200/2026-09-13T23:59+0200",
+  "control": {
+    "id": "shopify_ZZ_15493147984203_56386003730763",
+    "price": "2488.00 CZK",
+    "sale_price": "1806.00 CZK",
+    "sale_price_effective_date": "2026-09-10T00:00+0200/2026-09-13T23:59+0200"
+  },
+  "schema": [
+    "id",
+    "price",
+    "sale_price",
+    "sale_price_effective_date"
+  ]
+}
