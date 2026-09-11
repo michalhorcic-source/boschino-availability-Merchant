@@ -1,0 +1,59 @@
+name: Audit CZ appliance prices once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/audit-cz-appliance-prices-once.yml"
+      - "scripts/audit_cz_appliance_prices.py"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Audit every CZ appliance price
+        env:
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          SHOPIFY_SHOP: vvircm-fz.myshopify.com
+          CZ_MERCHANT_ACCOUNT_ID: "5757276720"
+        run: python scripts/audit_cz_appliance_prices.py
+
+      - name: Print summary
+        if: always()
+        run: |
+          if [ -f out/cz-appliance-price-audit/summary.json ]; then
+            cat out/cz-appliance-price-audit/summary.json
+          else
+            echo "summary.json missing"
+          fi
+
+      - name: Upload appliance audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cz-appliance-price-audit-${{ github.run_id }}
+          path: out/cz-appliance-price-audit/
+          if-no-files-found: warn
+          retention-days: 30
