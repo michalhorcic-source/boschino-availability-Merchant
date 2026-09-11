@@ -35,8 +35,9 @@ jobs:
 
       - name: Audit every CZ appliance price
         env:
-          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
-          SHOPIFY_SHOP: vvircm-fz.myshopify.com
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
+          SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
+          SHOPIFY_API_VERSION: "2026-04"
           CZ_MERCHANT_ACCOUNT_ID: "5757276720"
         run: python scripts/audit_cz_appliance_prices.py
 
