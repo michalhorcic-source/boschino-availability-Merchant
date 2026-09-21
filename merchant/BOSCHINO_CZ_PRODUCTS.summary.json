@@ -1,27 +1,27 @@
 {
-  "generated_at_utc": "2026-09-20T04:07:13.863119+00:00",
+  "generated_at_utc": "2026-09-21T04:07:52.204546+00:00",
   "source": "Google Merchant API processed products",
   "content_language": "cs",
   "feed_label": "CZK_105791684939",
   "processed_products": 51844,
   "matching_market_products": 51843,
   "availability_counts": {
-    "out_of_stock": 14661,
-    "backorder": 9067,
-    "in_stock": 28114,
+    "out_of_stock": 14691,
+    "backorder": 9047,
+    "in_stock": 28104,
     "": 1
   },
-  "purchasable_before_validation": 37181,
+  "purchasable_before_validation": 37151,
   "skipped_invalid_rows": 5,
   "missing_required_fields": {
     "image_link": 5
   },
-  "exported_products": 37176,
+  "exported_products": 37146,
   "purchasable_availability": [
     "backorder",
     "in_stock",
     "preorder"
   ],
-  "sha256": "f9b00eea97cd636c377040a01ea6e49cf3e207b3d390ef5bd81397c38a0d5bfc",
-  "bytes": 46617184
+  "sha256": "e6f919c5e83c541babf289939e9a3ff9cce98edc7aae8d37134516a6b5e6bbae",
+  "bytes": 46708189
 }
