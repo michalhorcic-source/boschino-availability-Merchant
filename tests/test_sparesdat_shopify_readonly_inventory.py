@@ -74,7 +74,7 @@ class InventoryTests(unittest.TestCase):
     def test_readonly_queries_and_report(self):
         fake = FakeClient()
         report = mod.inventory(fake)
-        self.assertEqual(report["status"], "COMPLETE")
+        self.assertEqual(report["status"], "BOUNDED_COMPLETE")
         self.assertEqual(report["sections"]["products"]["count"]["count"], 51881)
         self.assertEqual(report["sections"]["metaobject_definitions"]["definitions"][0]["fields"][0]["key"], "pdf_files")
         self.assertEqual(report["sections"]["generic_files_sample"]["sampled"], 1)
@@ -98,6 +98,7 @@ class InventoryTests(unittest.TestCase):
         report = mod.inventory(fake)
         self.assertEqual(report["sections"]["shop_locales"]["status"], "NO_SCOPE")
         self.assertEqual(report["sections"]["translations_sample"]["sample_status"], "NO_LOCALE_INVENTORY")
+        self.assertEqual(report["sections"]["translations_sample"]["status"], "SKIPPED")
         self.assertNotIn("shop_locales", [x[0] for x in fake.operations])
 
     def test_pagination_requires_progress(self):
