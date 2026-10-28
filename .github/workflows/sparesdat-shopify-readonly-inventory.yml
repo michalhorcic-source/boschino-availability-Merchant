@@ -25,7 +25,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_sparesdat_shopify_readonly_inventory.py' -v
       - name: Read Boschino Shopify Admin API inventory
         env:
-          SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
+          SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_ADMIN_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
           SHOPIFY_API_VERSION: '2026-07'
         run: python scripts/sparesdat_shopify_readonly_inventory.py --out out/sparesdat-admin-inventory/summary.json
