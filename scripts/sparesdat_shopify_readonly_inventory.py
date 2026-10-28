@@ -65,6 +65,15 @@ class InventoryError(RuntimeError):
     pass
 
 
+def has_read_scope(granted_scopes, required_scope):
+    """Shopify write scopes include matching read access (no extra scopes requested)."""
+    if required_scope in granted_scopes:
+        return True
+    if required_scope.startswith("read_"):
+        return ("write_" + required_scope[5:]) in granted_scopes
+    return False
+
+
 def check_shop(domain):
     if not domain or domain.strip().lower() != EXPECTED_SHOP:
         raise InventoryError("WRONG_SHOP_CONFIG")
@@ -153,7 +162,7 @@ def inventory(client):
         "shop_id": shop.get("id"),
         "api_version": client.version,
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
-        "access_scope_check": {k: k in scopes for k in relevant},
+        "access_scope_check": {k: has_read_scope(scopes, k) for k in relevant},
         "sections": {},
         "limitations": [
             "This is a bounded API inventory, not a complete media/asset export.",
@@ -165,7 +174,7 @@ def inventory(client):
 
     def optional(name, required_scope, action):
         acceptable_scopes = (required_scope,) if isinstance(required_scope, str) else tuple(required_scope)
-        if not any(scope in scopes for scope in acceptable_scopes):
+        if not any(has_read_scope(scopes, scope) for scope in acceptable_scopes):
             sections[name] = {"status": "NO_SCOPE", "required_scopes_any": list(acceptable_scopes)}
             return
         try:
