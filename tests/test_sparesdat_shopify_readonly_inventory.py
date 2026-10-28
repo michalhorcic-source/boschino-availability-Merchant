@@ -9,12 +9,12 @@ spec.loader.exec_module(mod)
 
 
 class FakeClient:
-    version = "2026-10"
+    version = "2026-07"
 
     def __init__(self, shop=mod.EXPECTED_SHOP, scopes=None):
         self.shop = shop
         self.scopes = scopes if scopes is not None else [
-            "read_products", "read_metaobject_definitions", "read_metaobjects", "read_files"
+            "read_products", "read_metaobject_definitions", "read_metaobjects", "read_files", "read_locales", "read_translations"
         ]
         self.operations = []
 
@@ -36,6 +36,19 @@ class FakeClient:
             return {"metaobjects": {"nodes": [{"id": "gid://shopify/Metaobject/2", "handle": "bosch-mcm3200w-01",
                         "fields": [{"key": "pdf_files"}, {"key": "brand"}]}],
                         "pageInfo": {"hasNextPage": True}}}
+        if op == "shop_locales":
+            return {"shopLocales": [
+                {"locale": "cs", "primary": True, "published": True},
+                {"locale": "sk", "primary": False, "published": True},
+                {"locale": "de", "primary": False, "published": True}
+            ]}
+        if op == "translation_sample":
+            return {"translatableResources": {"nodes": [
+                {"resourceId": "gid://shopify/Product/5", "translations": [
+                    {"key": "title", "outdated": False},
+                    {"key": "body_html", "outdated": True}
+                ]}
+            ]}}
         if op == "files_sample":
             return {"files": {"nodes": [{"id": "gid://shopify/GenericFile/3", "__typename": "GenericFile"}],
                               "pageInfo": {"hasNextPage": True}}}
@@ -65,6 +78,9 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(report["sections"]["products"]["count"]["count"], 51881)
         self.assertEqual(report["sections"]["metaobject_definitions"]["definitions"][0]["fields"][0]["key"], "pdf_files")
         self.assertEqual(report["sections"]["generic_files_sample"]["sampled"], 1)
+        self.assertEqual(len(report["sections"]["shop_locales"]["locales"]), 3)
+        self.assertEqual(len(report["sections"]["translations_sample"]["sampled_locales"]), 2)
+        self.assertTrue(report["sections"]["translations_sample"]["not_full_coverage"])
         self.assertNotIn("secret", repr(report).lower())
         for operation, query, variables in fake.operations:
             self.assertTrue(query.strip().startswith("query "))
@@ -76,6 +92,13 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(report["status"], "PARTIAL")
         self.assertEqual(report["sections"]["generic_files_sample"]["status"], "NO_SCOPE")
         self.assertNotIn("files_sample", [x[0] for x in fake.operations])
+
+    def test_missing_locales_scope_is_disclosed(self):
+        fake = FakeClient(scopes=["read_products", "read_translations"])
+        report = mod.inventory(fake)
+        self.assertEqual(report["sections"]["shop_locales"]["status"], "NO_SCOPE")
+        self.assertEqual(report["sections"]["translations_sample"]["sample_status"], "NO_LOCALE_INVENTORY")
+        self.assertNotIn("shop_locales", [x[0] for x in fake.operations])
 
     def test_pagination_requires_progress(self):
         class BadClient:
