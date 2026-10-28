@@ -101,6 +101,41 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(report["sections"]["translations_sample"]["status"], "SKIPPED")
         self.assertNotIn("shop_locales", [x[0] for x in fake.operations])
 
+    def test_write_scopes_also_authorize_matching_reads(self):
+        fake = FakeClient(scopes=[
+            "write_products", "write_metaobject_definitions", "write_metaobjects",
+            "write_files", "read_locales", "write_translations"
+        ])
+        report = mod.inventory(fake)
+        self.assertEqual(report["status"], "BOUNDED_COMPLETE")
+        for name in ("products", "metaobject_definitions", "product_metafield_definitions",
+                     "appliance_metaobjects_sample", "generic_files_sample",
+                     "shop_locales", "translations_sample"):
+            self.assertEqual(report["sections"][name]["status"], "OK", name)
+        for name in ("read_products", "read_metaobject_definitions",
+                     "read_metaobjects", "read_files", "read_translations"):
+            self.assertTrue(report["access_scope_check"][name], name)
+        self.assertFalse(report["access_scope_check"]["read_markets_home"])
+
+    def test_write_scope_does_not_grant_unrelated_read(self):
+        self.assertTrue(mod.has_read_scope({"write_products"}, "read_products"))
+        self.assertFalse(mod.has_read_scope({"write_products"}, "read_files"))
+        self.assertFalse(mod.has_read_scope({"read_products"}, "write_products"))
+        fake = FakeClient(scopes=["write_products"])
+        report = mod.inventory(fake)
+        self.assertEqual(report["sections"]["products"]["status"], "OK")
+        self.assertEqual(report["sections"]["generic_files_sample"]["status"], "NO_SCOPE")
+        self.assertEqual(report["sections"]["metaobject_definitions"]["status"], "NO_SCOPE")
+
+    def test_manual_workflow_reuses_existing_shop_secret(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows"
+                    / "sparesdat-shopify-readonly-inventory.yml").read_text(encoding="utf-8")
+        self.assertIn("SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}", workflow)
+        self.assertNotIn("SHOPIFY_SHOP_DOMAIN", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("schedule:", workflow)
+        self.assertNotIn("push:", workflow)
+
     def test_pagination_requires_progress(self):
         class BadClient:
             def query(self, *args, **kwargs):
