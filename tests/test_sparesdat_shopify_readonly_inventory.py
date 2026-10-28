@@ -1,5 +1,8 @@
 import importlib.util
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "sparesdat_shopify_readonly_inventory.py"
@@ -135,6 +138,54 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("schedule:", workflow)
         self.assertNotIn("push:", workflow)
+
+    def test_files_query_accepts_documented_alternative_scopes(self):
+        for scope in ("read_files", "write_files", "read_themes", "write_themes",
+                      "read_images", "write_images"):
+            with self.subTest(scope=scope):
+                fake = FakeClient(scopes=[scope])
+                report = mod.inventory(fake)
+                self.assertEqual(report["sections"]["generic_files_sample"]["status"], "OK")
+                self.assertIn("files_sample", [x[0] for x in fake.operations])
+        fake = FakeClient(scopes=["write_products"])
+        report = mod.inventory(fake)
+        self.assertEqual(report["sections"]["generic_files_sample"]["status"], "NO_SCOPE")
+
+    def test_public_artifact_requires_recipient_and_is_encrypted(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows"
+                    / "sparesdat-shopify-readonly-inventory.yml").read_text(encoding="utf-8")
+        self.assertIn("vars.SPARESDAT_INVENTORY_CERT_PEM", workflow)
+        self.assertIn("openssl x509", workflow)
+        self.assertIn("openssl cms -encrypt -binary -aes-256-gcm", workflow)
+        self.assertIn("trap 'rm -f", workflow)
+        self.assertIn("path: out/sparesdat-admin-inventory/summary.cms", workflow)
+        self.assertNotIn("path: out/sparesdat-admin-inventory/summary.json", workflow)
+        self.assertIn("if-no-files-found: error", workflow)
+        self.assertLess(workflow.index("Verify encryption recipient before contacting Shopify"),
+                        workflow.index("Read Boschino Shopify Admin API inventory"))
+        self.assertLess(workflow.index("Encrypt inventory report and remove plaintext"),
+                        workflow.index("Upload encrypted inventory"))
+        self.assertNotIn("if: always()", workflow)
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL not present")
+    def test_openssl_authenticated_cms_encryption_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            key, cert = folder / "private.pem", folder / "public.pem"
+            original, encrypted, recovered = folder / "source.json", folder / "source.cms", folder / "recovered.json"
+            original.write_text('{"confidential":"example-only"}', encoding="utf-8")
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                            "-days", "1", "-keyout", str(key), "-out", str(cert),
+                            "-subj", "/CN=local-test-only"], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["openssl", "cms", "-encrypt", "-binary", "-aes-256-gcm",
+                            "-in", str(original), "-out", str(encrypted), "-outform", "DER",
+                            str(cert)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["openssl", "cms", "-decrypt", "-inform", "DER", "-in", str(encrypted),
+                            "-recip", str(cert), "-inkey", str(key), "-out", str(recovered)],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.assertEqual(original.read_bytes(), recovered.read_bytes())
+            self.assertNotIn(b"confidential", encrypted.read_bytes())
 
     def test_pagination_requires_progress(self):
         class BadClient:
