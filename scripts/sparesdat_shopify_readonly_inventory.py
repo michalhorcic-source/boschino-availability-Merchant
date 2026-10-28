@@ -17,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 EXPECTED_SHOP = "vvircm-fz.myshopify.com"
-DEFAULT_API_VERSION = "2026-10"
+DEFAULT_API_VERSION = "2026-07"
 MAX_DEFINITION_PAGES = 10
 
 IDENTITY = """query SparesdatShopIdentity {
@@ -43,6 +43,14 @@ APPLIANCE_SAMPLE = """query SparesdatApplianceSample {
   metaobjects(type: "spotrebic", first: 3) {
     pageInfo { hasNextPage }
     nodes { id handle fields { key } }
+  }
+}"""
+LOCALES = """query SparesdatLocales {
+  shopLocales { locale primary published }
+}"""
+TRANSLATIONS_SAMPLE = """query SparesdatTranslationSample($locale: String!) {
+  translatableResources(first: 3, resourceType: PRODUCT) {
+    nodes { resourceId translations(locale: $locale) { key outdated } }
   }
 }"""
 FILES_SAMPLE = """query SparesdatFileSample {
@@ -138,7 +146,7 @@ def inventory(client):
     if shop.get("myshopifyDomain", "").lower() != EXPECTED_SHOP:
         raise InventoryError("WRONG_SHOP_IDENTITY")
     scopes = set(x.get("handle") for x in (identity.get("currentAppInstallation") or {}).get("accessScopes", []) if x.get("handle"))
-    relevant = ("read_products", "read_metaobject_definitions", "read_metaobjects", "read_files")
+    relevant = ("read_products", "read_metaobject_definitions", "read_metaobjects", "read_files", "read_locales", "read_markets_home", "read_translations")
     result = {
         "report_type": "sparesdat-shopify-readonly-inventory-v1",
         "verified_shop": EXPECTED_SHOP,
@@ -156,8 +164,9 @@ def inventory(client):
     sections = result["sections"]
 
     def optional(name, required_scope, action):
-        if required_scope not in scopes:
-            sections[name] = {"status": "NO_SCOPE", "required_scope": required_scope}
+        acceptable_scopes = (required_scope,) if isinstance(required_scope, str) else tuple(required_scope)
+        if not any(scope in scopes for scope in acceptable_scopes):
+            sections[name] = {"status": "NO_SCOPE", "required_scopes_any": list(acceptable_scopes)}
             return
         try:
             sections[name] = {"status": "OK", **action()}
@@ -200,6 +209,31 @@ def inventory(client):
         return {"sampled": len(nodes), "more_available": bool((data.get("pageInfo") or {}).get("hasNextPage")),
                 "ids": [{"id": n.get("id"), "type": n.get("__typename")} for n in nodes]}
     optional("generic_files_sample", "read_files", files)
+
+    def locales():
+        values = client.query("shop_locales", LOCALES).get("shopLocales") or []
+        return {"locales": sorted(
+            [{"code": x.get("locale"), "primary": bool(x.get("primary")), "published": bool(x.get("published"))}
+             for x in values], key=lambda x: x["code"] or ""
+        )}
+    optional("shop_locales", ("read_locales", "read_markets_home"), locales)
+
+    def translations():
+        known = sections.get("shop_locales") or {}
+        if known.get("status") != "OK":
+            return {"sample_status": "NO_LOCALE_INVENTORY", "sampled_locales": []}
+        codes = [x["code"] for x in known.get("locales", []) if not x.get("primary") and x.get("code")]
+        sample = []
+        for locale in codes[:3]:
+            nodes = (client.query("translation_sample", TRANSLATIONS_SAMPLE, {"locale": locale})
+                     .get("translatableResources") or {}).get("nodes") or []
+            sample.append({"locale": locale, "sampled_products": len(nodes),
+                           "translation_keys": sum(len(n.get("translations") or []) for n in nodes),
+                           "outdated_keys": sum(1 for n in nodes for v in (n.get("translations") or [])
+                                                if v.get("outdated"))})
+        return {"sample_status": "SAMPLE_ONLY", "sampled_locales": sample,
+                "not_full_coverage": True}
+    optional("translations_sample", "read_translations", translations)
 
     result["status"] = ("COMPLETE" if all(v.get("status") == "OK" for v in sections.values()) else "PARTIAL")
     return result
