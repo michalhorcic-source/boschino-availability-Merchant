@@ -1,0 +1,39 @@
+name: Sparesdat Boschino Admin API - read-only inventory
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sparesdat-boschino-shopify-readonly-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify read-only inventory tests
+        run: python -m unittest discover -s tests -p 'test_sparesdat_shopify_readonly_inventory.py' -v
+      - name: Read Boschino Shopify Admin API inventory
+        env:
+          SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
+          SHOPIFY_ADMIN_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
+          SHOPIFY_API_VERSION: '2026-10'
+        run: python scripts/sparesdat_shopify_readonly_inventory.py --out out/sparesdat-admin-inventory/summary.json
+      - name: Store private inventory summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sparesdat-boschino-admin-readonly-${{ github.run_id }}
+          path: out/sparesdat-admin-inventory/summary.json
+          if-no-files-found: warn
+          retention-days: 7
