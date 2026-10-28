@@ -23,17 +23,39 @@ jobs:
           python-version: '3.12'
       - name: Verify read-only inventory tests
         run: python -m unittest discover -s tests -p 'test_sparesdat_shopify_readonly_inventory.py' -v
+      - name: Verify encryption recipient before contacting Shopify
+        shell: bash
+        env:
+          SPARESDAT_CERT_PEM: ${{ vars.SPARESDAT_INVENTORY_CERT_PEM }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SPARESDAT_CERT_PEM" ]; then
+            echo "::error::SPARESDAT_INVENTORY_CERT_PEM is not configured; refuse API inventory without encrypted delivery."
+            exit 1
+          fi
+          printf '%s\n' "$SPARESDAT_CERT_PEM" > "$RUNNER_TEMP/sparesdat-inventory-recipient.pem"
+          openssl x509 -in "$RUNNER_TEMP/sparesdat-inventory-recipient.pem" -noout -checkend 0
+
       - name: Read Boschino Shopify Admin API inventory
         env:
           SHOPIFY_SHOP: ${{ secrets.SHOPIFY_SHOP }}
           SHOPIFY_ADMIN_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ADMIN_ACCESS_TOKEN }}
           SHOPIFY_API_VERSION: '2026-07'
         run: python scripts/sparesdat_shopify_readonly_inventory.py --out out/sparesdat-admin-inventory/summary.json
-      - name: Store private inventory summary
-        if: always()
+      - name: Encrypt inventory report and remove plaintext
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="out/sparesdat-admin-inventory/summary.json"
+          trap 'rm -f "$report"' EXIT
+          test -s "$report"
+          openssl cms -encrypt -binary -aes-256-gcm -in "$report" -out "out/sparesdat-admin-inventory/summary.cms" -outform DER "$RUNNER_TEMP/sparesdat-inventory-recipient.pem"
+          test -s "out/sparesdat-admin-inventory/summary.cms"
+      - name: Upload encrypted inventory (public repository)
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: sparesdat-boschino-admin-readonly-${{ github.run_id }}
-          path: out/sparesdat-admin-inventory/summary.json
-          if-no-files-found: warn
+          name: sparesdat-boschino-admin-readonly-encrypted-${{ github.run_id }}
+          path: out/sparesdat-admin-inventory/summary.cms
+          if-no-files-found: error
           retention-days: 7
