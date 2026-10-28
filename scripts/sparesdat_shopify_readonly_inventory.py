@@ -169,7 +169,10 @@ def inventory(client):
             sections[name] = {"status": "NO_SCOPE", "required_scopes_any": list(acceptable_scopes)}
             return
         try:
-            sections[name] = {"status": "OK", **action()}
+            outcome = action()
+            status = ("SKIPPED" if outcome.get("sample_status") == "NO_LOCALE_INVENTORY"
+                      else "TRUNCATED" if outcome.get("truncated") else "OK")
+            sections[name] = {"status": status, **outcome}
         except InventoryError as exc:
             sections[name] = {"status": "QUERY_FAILED", "error_code": str(exc)}
 
@@ -235,7 +238,7 @@ def inventory(client):
                 "not_full_coverage": True}
     optional("translations_sample", "read_translations", translations)
 
-    result["status"] = ("COMPLETE" if all(v.get("status") == "OK" for v in sections.values()) else "PARTIAL")
+    result["status"] = ("BOUNDED_COMPLETE" if all(v.get("status") == "OK" for v in sections.values()) else "PARTIAL")
     return result
 
 
