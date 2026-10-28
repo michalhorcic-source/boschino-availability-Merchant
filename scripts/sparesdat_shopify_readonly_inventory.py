@@ -155,7 +155,7 @@ def inventory(client):
     if shop.get("myshopifyDomain", "").lower() != EXPECTED_SHOP:
         raise InventoryError("WRONG_SHOP_IDENTITY")
     scopes = set(x.get("handle") for x in (identity.get("currentAppInstallation") or {}).get("accessScopes", []) if x.get("handle"))
-    relevant = ("read_products", "read_metaobject_definitions", "read_metaobjects", "read_files", "read_locales", "read_markets_home", "read_translations")
+    relevant = ("read_products", "read_metaobject_definitions", "read_metaobjects", "read_files", "read_themes", "read_images", "read_locales", "read_markets_home", "read_translations")
     result = {
         "report_type": "sparesdat-shopify-readonly-inventory-v1",
         "verified_shop": EXPECTED_SHOP,
@@ -220,7 +220,7 @@ def inventory(client):
         nodes = data.get("nodes") or []
         return {"sampled": len(nodes), "more_available": bool((data.get("pageInfo") or {}).get("hasNextPage")),
                 "ids": [{"id": n.get("id"), "type": n.get("__typename")} for n in nodes]}
-    optional("generic_files_sample", "read_files", files)
+    optional("generic_files_sample", ("read_files", "read_themes", "read_images"), files)
 
     def locales():
         values = client.query("shop_locales", LOCALES).get("shopLocales") or []
